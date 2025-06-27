@@ -80,10 +80,30 @@ function createStatusNotification(statusMessage) {
     };
 }
 
+/**
+ * Create a mint notification message for Discord
+ * @param {Object} mintData - Mint transaction data
+ * @returns {Object} Discord message object with embed
+ */
+function createMintNotification(mintData) {
+    const { tokenId, txHash, to, blockNumber, timestamp } = mintData;
+    const mintTime = new Date(timestamp * 1000).toISOString();
+    
+    return {
+        embeds: [{
+            color: 0x9932CC, // Purple color for mint notifications
+            title: "🎉 New NFT Mint Detected!",
+            description: `**Token ID:** ${tokenId}\n**Transaction:** \`${txHash}\`\n**Minted to:** \`${to}\`\n**Block:** ${blockNumber}\n**Time:** ${mintTime}`,
+            timestamp: new Date(timestamp * 1000).toISOString()
+        }]
+    };
+}
+
 module.exports = {
     createScheduledMintMessage,
     createMintEventLog,
     createCustomNotification,
     createErrorNotification,
-    createStatusNotification
+    createStatusNotification,
+    createMintNotification
 };
