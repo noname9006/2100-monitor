@@ -6,17 +6,24 @@
 /**
  * Create a scheduled message with total mints count, date/time, and user login
  * @param {number} totalMints - The total number of mints (based on token ID)
+ * @param {number} mints24h - The number of mints in the last 24 hours
  * @returns {Object} Discord message object with embed
  */
-function createScheduledMintMessage(totalMints) {
+
+
+function createScheduledMintMessage(totalMints, mints24h) {
     // Get current date and time in UTC
     const now = new Date();
     const utcDateTime = now.toISOString().replace('T', ' ').substring(0, 19);
     
     return {
         embeds: [{
+            title: "Citadel Invitations",
             color: 0xFFD700, // Gold color
-            description: `Total mints: ${totalMints}\nCurrent Date and Time (UTC - YYYY-MM-DD HH:MM:SS formatted): ${utcDateTime}\nCurrent User's Login: noname9006`
+            thumbnail: {
+                url: "https://media.discordapp.net/attachments/1317881540176248904/1388171834075123772/ezgif-6817638b410628_copy.png"
+            },
+            description: `Last 24 hours: ${mints24h} mints\nTotal mints: ${totalMints}`
         }]
     };
 }

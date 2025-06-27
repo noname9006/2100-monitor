@@ -1,5 +1,5 @@
 const ethers = require('ethers');
-const { createMintNotification } = require('./messageConstructor');
+const { createScheduledMintMessage } = require('./messageConstructor');
 require('dotenv').config();
 
 // Enhanced ERC-721 ABI with events for better tracking
@@ -328,12 +328,23 @@ async function trackNFT(client) {
         
         if (!latestMint) {
             console.log('📊 No mint transactions found in scan');
+            // Send scheduled message with current total supply
+            try {
+                const totalSupply = await contract.totalSupply();
+                const totalMints = parseInt(totalSupply.toString());
+                await sendDiscordNotification(client, { tokenId: totalMints });
+            } catch (error) {
+                console.warn('⚠️ Could not get total supply for scheduled message');
+                await sendDiscordNotification(client, { tokenId: lastKnownTokenId });
+            }
             return;
         }
         
         // Check if this is a new transaction we haven't processed
         if (latestMint.txHash === lastProcessedTxHash) {
             console.log(`📊 No new mints detected. Latest token ID: ${latestMint.tokenId} (tx: ${latestMint.txHash.substring(0, 10)}...)`);
+            // Send scheduled message with current total
+            await sendDiscordNotification(client, { tokenId: latestMint.tokenId });
             return;
         }
         
@@ -343,9 +354,8 @@ async function trackNFT(client) {
         console.log(`👤 Minted to: ${latestMint.to}`);
         console.log(`📊 Scanned ${latestMint.blocksScannedToFind} blocks to find this mint`);
         
-        // Send notification to Discord
-        await sendDiscordNotification(client, latestMint);
-        
+        // >>>> DO NOT send any Discord message here <<<<
+
         // Update tracking variables
         lastKnownTokenId = latestMint.tokenId;
         lastProcessedTxHash = latestMint.txHash;
@@ -356,14 +366,18 @@ async function trackNFT(client) {
 }
 
 /**
- * Send Discord notification about new mint
+ * Send Discord notification about scheduled status
  */
 async function sendDiscordNotification(client, mintData) {
     try {
         const { tokenId } = mintData;
+        // Get the number of mints in the last 24 hours
+        const mints24h = await getMintsCountLast24h();
+        // Compose the message with this number
+        const message = createScheduledMintMessage(tokenId, mints24h);
 
-        // Create the message using the message constructor
-        const message = createMintNotification(tokenId);
+        // Add logging for message content
+        console.log("📝 Preparing to send Discord message with content:", JSON.stringify(message));
 
         // Send to specified channel or all available channels
         const channelId = process.env.DISCORD_CHANNEL_ID;
@@ -371,6 +385,7 @@ async function sendDiscordNotification(client, mintData) {
         if (channelId) {
             const channel = client.channels.cache.get(channelId);
             if (channel) {
+                console.log(`📝 Attempting to send message to channel: ${channel.name} (${channel.id})`);
                 await channel.send(message);
                 console.log(`📤 Notification sent to channel ${channel.name}`);
             } else {
@@ -384,14 +399,13 @@ async function sendDiscordNotification(client, mintData) {
                     ch.type === 0 && // Text channel
                     ch.permissionsFor(guild.members.me)?.has(['SendMessages', 'EmbedLinks'])
                 );
-                
                 if (channel) {
+                    console.log(`📝 Attempting to send message to guild: ${guild.name}, channel: ${channel.name} (${channel.id})`);
                     await channel.send(message);
                     console.log(`📤 Notification sent to ${guild.name}#${channel.name}`);
                     sentCount++;
                 }
             }
-            
             if (sentCount === 0) {
                 console.warn('⚠️ No suitable channels found to send notifications');
             }
@@ -460,10 +474,54 @@ async function checkLatestMint() {
     }
 }
 
+/**
+ * Get the number of mints in the last 24 hours
+ */
+async function getMintsCountLast24h() {
+    try {
+        if (!contract) throw new Error('Contract not initialized');
+        const now = Math.floor(Date.now() / 1000);
+        const dayAgo = now - 24 * 60 * 60;
+        let blocksScanned = 0;
+        let batchSize = 2000;
+        let firstTokenId = null;
+        let lastTokenId = null;
+        const currentBlock = await provider.getBlockNumber();
+        const maxBlocksToScan = 50000;
+        let foundAny = false;
+        while (blocksScanned < maxBlocksToScan) {
+            const fromBlock = Math.max(0, currentBlock - blocksScanned - batchSize);
+            const toBlock = currentBlock - blocksScanned;
+            if (fromBlock >= toBlock) break;
+            const filter = contract.filters.Transfer(ethers.constants.AddressZero, null);
+            const events = await contract.queryFilter(filter, fromBlock, toBlock);
+            for (const event of events) {
+                const tokenId = parseInt(event.args.tokenId.toString());
+                const block = await provider.getBlock(event.blockNumber);
+                const ts = block.timestamp;
+                if (ts >= dayAgo && ts <= now) {
+                    if (!foundAny) {
+                        lastTokenId = tokenId;
+                        foundAny = true;
+                    }
+                    firstTokenId = tokenId;
+                }
+            }
+            blocksScanned += batchSize;
+        }
+        if (!foundAny) return 0;
+        return Math.abs(lastTokenId - firstTokenId) + 1;
+    } catch (error) {
+        console.error('❌ Error counting mints in last 24h:', error);
+        return 0;
+    }
+}
+
 module.exports = {
     initializeNFTTracker,
     trackNFT,
     getNFTStats,
     checkLatestMint,
-    getRecentMintTransactions
+    getRecentMintTransactions,
+    getMintsCountLast24h
 };
