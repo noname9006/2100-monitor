@@ -363,7 +363,7 @@ async function sendDiscordNotification(client, mintData) {
         const { tokenId } = mintData;
 
         // Create the message using the message constructor
-        const message = createMintNotification(tokenId);
+        const message = createMintNotification(mintData);
 
         // Send to specified channel or all available channels
         const channelId = process.env.DISCORD_CHANNEL_ID;
