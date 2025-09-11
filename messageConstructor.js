@@ -23,7 +23,12 @@ function createScheduledMintMessage(totalMints, mints24h) {
             thumbnail: {
                 url: "https://media.discordapp.net/attachments/1317881540176248904/1388171834075123772/ezgif-6817638b410628_copy.png"
             },
-            description: `Last 24 hours: ${mints24h} mints\nTotal mints: ${totalMints}`
+            description: `**Number of NFTs minted**\n\n`,
+            fields: [
+                { name: '\u200B', value: '\u200B', inline: false },
+                { name: 'Last 24 hours:', value: `**${mints24h}**`, inline: true },
+                { name: 'Total mints:', value: `**${totalMints}**`, inline: true },
+            ]
         }]
     };
 }
