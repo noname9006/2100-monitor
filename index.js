@@ -3,6 +3,8 @@ const cron = require('node-cron');
 const { trackNFT, initializeNFTTracker } = require('./nft.js');
 const { createSatoshiSpinEmbed } = require('./spin.js');
 const { updateCounters } = require('./counters.js');
+const { StbtcCounters } = require('./stbtc_counters.js');
+
 require('dotenv').config();
 
 // Create Discord client
@@ -14,12 +16,20 @@ const client = new Client({
     ]
 });
 
+// Initialize STBTC counters
+let stbtcCounters;
+
 // Bot ready event
 client.once('ready', async () => {
     console.log(`[${new Date().toISOString()}] INFO: ✅ ${client.user.tag} is online!`);
     
     // Initialize NFT tracker
     await initializeNFTTracker();
+    
+    // Initialize STBTC counters
+    stbtcCounters = new StbtcCounters(client);
+    stbtcCounters.start();
+    console.log(`[${new Date().toISOString()}] INFO: 🚀 STBTC counters initialized and started`);
     
     // Set up cron job for messages
     const msgCronSchedule = process.env.CRON_SCHEDULE_MSG || '*/5 * * * *';
@@ -70,7 +80,7 @@ client.once('ready', async () => {
         }
     });
 
-    // Set up cron job for counters
+    // Set up cron job for counters (existing counters)
     const counterCronSchedule = process.env.CRON_SCHEDULE_COUNTER;
     if (counterCronSchedule) {
         console.log(`[${new Date().toISOString()}] INFO: 🕒 Setting up counter cron job with schedule: ${counterCronSchedule}`);
@@ -94,6 +104,25 @@ client.on('error', (error) => {
 
 process.on('unhandledRejection', (error) => {
     console.error(`[${new Date().toISOString()}] ERROR: ❌ Unhandled promise rejection:`, error);
+});
+
+// Graceful shutdown
+process.on('SIGINT', () => {
+    console.log(`[${new Date().toISOString()}] INFO: 🔄 Gracefully shutting down...`);
+    if (stbtcCounters) {
+        stbtcCounters.stop();
+    }
+    client.destroy();
+    process.exit(0);
+});
+
+process.on('SIGTERM', () => {
+    console.log(`[${new Date().toISOString()}] INFO: 🔄 Gracefully shutting down...`);
+    if (stbtcCounters) {
+        stbtcCounters.stop();
+    }
+    client.destroy();
+    process.exit(0);
 });
 
 // Login to Discord
