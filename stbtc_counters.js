@@ -71,20 +71,21 @@ class StbtcCounters {
 
             const tokenQuantity = parseFloat(targetToken.tokenQuantity);
             const tokenDecimals = parseInt(targetToken.tokenDecimals || 18);
-            const stbtcDecimals = parseInt(process.env.STBTC_DECIMALS || 2);
+            const stbtcDecimals = parseInt(process.env.STBTC1_DECIMALS || 2);
 
             // Calculate actual value considering token decimals
             const actualValue = tokenQuantity / Math.pow(10, tokenDecimals);
             
-            // Round down to specified decimals
-            const displayValue = Math.floor(actualValue * Math.pow(10, stbtcDecimals)) / Math.pow(10, stbtcDecimals);
+            // Round to specified decimals and format with fixed decimal places
+            const roundedValue = Math.round(actualValue * Math.pow(10, stbtcDecimals)) / Math.pow(10, stbtcDecimals);
+            const displayValue = roundedValue.toFixed(stbtcDecimals);
 
             await this.updateChannelName(channelId, nameTemplate, displayValue);
             
             console.log(`[${new Date().toISOString()}] INFO: Updated STBTC token quantity counter: ${displayValue}`);
             
-            // Store for cap percentage calculation
-            this.lastTokenQuantity = displayValue;
+            // Store for cap percentage calculation (as number for calculations)
+            this.lastTokenQuantity = roundedValue;
 
         } catch (error) {
             console.error(`[${new Date().toISOString()}] ERROR: Failed to update token quantity counter:`, error.message);
@@ -132,22 +133,27 @@ class StbtcCounters {
 
             const response = await axios.get('https://sidecar.botanixlabs.com/api/exchangeRate');
             
-            if (!response.data || !Array.isArray(response.data) || response.data.length === 0) {
+            // Check for response.data.rates instead of response.data
+            if (!response.data || !response.data.rates || !Array.isArray(response.data.rates) || response.data.rates.length === 0) {
                 console.error(`[${new Date().toISOString()}] ERROR: Invalid exchange rate data`);
                 return;
             }
 
-            // Find the most recent date
-            const sortedData = response.data.sort((a, b) => new Date(b.date) - new Date(a.date));
+            // Find the most recent date from the rates array
+            const sortedData = response.data.rates.sort((a, b) => new Date(b.date) - new Date(a.date));
             const mostRecent = sortedData[0];
             
-            // Convert to percentage with up to 2 decimals
-            const exchangeRate = parseFloat(mostRecent.rate || mostRecent.exchangeRate || 0);
-            const percentage = Math.round(exchangeRate * 100 * 100) / 100; // Up to 2 decimals
-
-            await this.updateChannelName(channelId, nameTemplate, `${percentage}%`);
+            // Get decimals from env
+            const stbtcDecimals = parseInt(process.env.STBTC3_DECIMALS || 6);
             
-            console.log(`[${new Date().toISOString()}] INFO: Updated STBTC exchange rate counter: ${percentage}%`);
+            // Get exchange rate as number (not percentage)
+            const exchangeRate = parseFloat(mostRecent.rate || mostRecent.exchangeRate || 0);
+            const roundedValue = Math.round(exchangeRate * Math.pow(10, stbtcDecimals)) / Math.pow(10, stbtcDecimals);
+            const displayValue = roundedValue.toFixed(stbtcDecimals);
+
+            await this.updateChannelName(channelId, nameTemplate, displayValue);
+            
+            console.log(`[${new Date().toISOString()}] INFO: Updated STBTC exchange rate counter: ${displayValue}`);
 
         } catch (error) {
             console.error(`[${new Date().toISOString()}] ERROR: Failed to update exchange rate counter:`, error.message);
@@ -155,7 +161,7 @@ class StbtcCounters {
     }
 
     /**
-     * Counter 4: Cap percentage (STBTC_CAP / token quantity)
+     * Counter 4: Cap percentage (token quantity / STBTC_CAP)
      */
     async updateCapPercentageCounter() {
         try {
@@ -187,12 +193,17 @@ class StbtcCounters {
                 return;
             }
 
-            // Calculate percentage: STBTC_CAP / token_quantity * 100
-            const percentage = Math.round((stbtcCap / tokenQuantity) * 100 * 100) / 100; // Up to 2 decimals
+            // Get decimals from env
+            const stbtcDecimals = parseInt(process.env.STBTC4_DECIMALS || 2);
 
-            await this.updateChannelName(channelId, nameTemplate, `${percentage}%`);
+            // Calculate percentage: token_quantity / STBTC_CAP * 100
+            const percentage = (tokenQuantity / stbtcCap) * 100;
+            const roundedValue = Math.round(percentage * Math.pow(10, stbtcDecimals)) / Math.pow(10, stbtcDecimals);
+            const displayValue = roundedValue.toFixed(stbtcDecimals);
+
+            await this.updateChannelName(channelId, nameTemplate, `${displayValue}%`);
             
-            console.log(`[${new Date().toISOString()}] INFO: Updated STBTC cap percentage counter: ${percentage}% (${stbtcCap}/${tokenQuantity})`);
+            console.log(`[${new Date().toISOString()}] INFO: Updated STBTC cap percentage counter: ${displayValue}% (${tokenQuantity}/${stbtcCap})`);
 
         } catch (error) {
             console.error(`[${new Date().toISOString()}] ERROR: Failed to update cap percentage counter:`, error.message);
@@ -216,7 +227,15 @@ class StbtcCounters {
                 return;
             }
 
-            const newName = nameTemplate.replace('{count}', value);
+            // Replace placeholders in the template
+            let newName = nameTemplate.replace('{count}', value);
+            
+            // Replace {STBTC_CAP} with the environment variable value
+            if (newName.includes('{STBTC_CAP}')) {
+                const stbtcCap = process.env.STBTC_CAP || '0';
+                newName = newName.replace('{STBTC_CAP}', stbtcCap);
+            }
+            
             await channel.setName(newName);
             
             console.log(`[${new Date().toISOString()}] DEBUG: Updated channel ${channelId} name to: ${newName}`);
