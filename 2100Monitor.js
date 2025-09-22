@@ -5,6 +5,9 @@ const { createSatoshiSpinEmbed } = require('./spin.js');
 const { updateCounters } = require('./counters.js');
 const { StbtcCounters } = require('./stbtc_counters.js');
 
+// ADD THIS LINE - Import the transaction tracker
+const { initializeTransactionTracker, startTransactionTracking } = require('./2100Tx.js');
+
 require('dotenv').config();
 
 // Create Discord client
@@ -25,6 +28,16 @@ client.once('ready', async () => {
     
     // Initialize NFT tracker
     await initializeNFTTracker();
+    
+    // ADD THIS BLOCK - Initialize transaction tracker
+    try {
+        console.log(`[${new Date().toISOString()}] INFO: 🚀 Initializing 2100 transaction tracker...`);
+        await initializeTransactionTracker();
+        startTransactionTracking();
+        console.log(`[${new Date().toISOString()}] INFO: ✅ 2100 transaction tracker initialized and started`);
+    } catch (error) {
+        console.error(`[${new Date().toISOString()}] ERROR: ❌ Failed to initialize 2100 transaction tracker:`, error.message);
+    }
     
     // Initialize STBTC counters
     stbtcCounters = new StbtcCounters(client);

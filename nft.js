@@ -16,10 +16,17 @@ const ERC721_ABI = [
     "event Transfer(address indexed from, address indexed to, uint256 indexed tokenId)"
 ];
 
+// Global variables - properly declared
 let providers = [];
 let contracts = [];
 let lastKnownTokenIds = [];
 let lastProcessedTxHashes = [];
+
+// Single references for backward compatibility
+let provider = null;
+let contract = null;
+let lastKnownTokenId = 0;
+let lastProcessedTxHash = null;
 
 function getContractAddresses() {
     return (process.env.CONTRACT_ADDRESS || '').split(',').map(addr => addr.trim()).filter(Boolean);
@@ -56,7 +63,18 @@ function createProvider(rpcUrl) {
  */
 async function scanForMintTransaction(maxBlocksToScan = 10000) {
     try {
-        const currentBlock = await provider.getBlockNumber();
+        // Use the first provider and contract
+        const currentProvider = providers[0] || provider;
+        const currentContract = contracts[0] || contract;
+        
+        if (!currentProvider) {
+            throw new Error('Provider not initialized');
+        }
+        if (!currentContract) {
+            throw new Error('Contract not initialized');
+        }
+
+        const currentBlock = await currentProvider.getBlockNumber();
         console.log(`[${new Date().toISOString()}] INFO: 🔍 Starting scan from current block ${currentBlock}...`);
         
         let blocksScanned = 0;
@@ -76,8 +94,9 @@ async function scanForMintTransaction(maxBlocksToScan = 10000) {
             
             try {
                 // Get mint events (Transfer from zero address)
-                const filter = contract.filters.Transfer(ethers.constants.AddressZero, null);
-                const events = await contract.queryFilter(filter, fromBlock, toBlock);
+                const zeroAddress = (ethers.constants && ethers.constants.AddressZero) || ethers.ZeroAddress || '0x0000000000000000000000000000000000000000';
+                const filter = currentContract.filters.Transfer(zeroAddress, null);
+                const events = await currentContract.queryFilter(filter, fromBlock, toBlock);
                 
                 if (events.length > 0) {
                     console.log(`[${new Date().toISOString()}] INFO: ✅ Found ${events.length} mint transaction(s) in blocks ${fromBlock}-${toBlock}`);
@@ -97,8 +116,8 @@ async function scanForMintTransaction(maxBlocksToScan = 10000) {
                     
                     // Get transaction and block details
                     const [tx, block] = await Promise.all([
-                        provider.getTransaction(txHash),
-                        provider.getBlock(blockNumber)
+                        currentProvider.getTransaction(txHash),
+                        currentProvider.getBlock(blockNumber)
                     ]);
                     
                     foundMint = {
@@ -108,7 +127,7 @@ async function scanForMintTransaction(maxBlocksToScan = 10000) {
                         timestamp: block.timestamp,
                         to: latestEvent.args.to,
                         gasUsed: tx.gasLimit ? tx.gasLimit.toString() : 'Unknown',
-                        gasPrice: tx.gasPrice ? ethers.utils.formatUnits(tx.gasPrice, 'gwei') : 'Unknown',
+                        gasPrice: tx.gasPrice ? (ethers.utils ? ethers.utils.formatUnits(tx.gasPrice, 'gwei') : tx.gasPrice.toString()) : 'Unknown',
                         totalEventsFound: events.length,
                         blocksScannedToFind: blocksScanned + (currentBlock - blockNumber)
                     };
@@ -177,7 +196,14 @@ async function getRecentMintTransactions(limit = 5) {
     try {
         console.log(`[${new Date().toISOString()}] INFO: 🔍 Scanning for last ${limit} mint transactions...`);
         
-        const currentBlock = await provider.getBlockNumber();
+        const currentProvider = providers[0] || provider;
+        const currentContract = contracts[0] || contract;
+        
+        if (!currentProvider || !currentContract) {
+            throw new Error('Provider or contract not initialized');
+        }
+
+        const currentBlock = await currentProvider.getBlockNumber();
         let blocksScanned = 0;
         let batchSize = 2000;
         let allMints = [];
@@ -192,8 +218,9 @@ async function getRecentMintTransactions(limit = 5) {
             console.log(`[${new Date().toISOString()}] INFO: 🔍 Scanning blocks ${fromBlock} to ${toBlock} for mints (found ${allMints.length}/${limit})...`);
             
             try {
-                const filter = contract.filters.Transfer(ethers.constants.AddressZero, null);
-                const events = await contract.queryFilter(filter, fromBlock, toBlock);
+                const zeroAddress = (ethers.constants && ethers.constants.AddressZero) || ethers.ZeroAddress || '0x0000000000000000000000000000000000000000';
+                const filter = currentContract.filters.Transfer(zeroAddress, null);
+                const events = await currentContract.queryFilter(filter, fromBlock, toBlock);
                 
                 if (events.length > 0) {
                     console.log(`[${new Date().toISOString()}] INFO: ✅ Found ${events.length} mint(s) in blocks ${fromBlock}-${toBlock}`);
@@ -203,7 +230,7 @@ async function getRecentMintTransactions(limit = 5) {
                         if (allMints.length >= limit) break;
                         
                         const tokenId = parseInt(event.args.tokenId.toString());
-                        const block = await provider.getBlock(event.blockNumber);
+                        const block = await currentProvider.getBlock(event.blockNumber);
                         
                         allMints.push({
                             tokenId,
@@ -254,30 +281,48 @@ async function initializeNFTTracker() {
         const addresses = getContractAddresses();
         if (!addresses.length) throw new Error('No CONTRACT_ADDRESS specified');
         if (!process.env.RPC_URL) throw new Error('RPC_URL environment variable is required');
+        
+        // Clear existing arrays
         providers = [];
         contracts = [];
         lastKnownTokenIds = [];
         lastProcessedTxHashes = [];
+        
         for (const address of addresses) {
-            const provider = createProvider(process.env.RPC_URL);
-            providers.push(provider);
-            const contract = new ethers.Contract(address, ERC721_ABI, provider);
-            contracts.push(contract);
+            const newProvider = createProvider(process.env.RPC_URL);
+            providers.push(newProvider);
+            const newContract = new ethers.Contract(address, ERC721_ABI, newProvider);
+            contracts.push(newContract);
             // Initialize lastKnownTokenIds and lastProcessedTxHashes for each contract
             lastKnownTokenIds.push(0);
             lastProcessedTxHashes.push(null);
         }
+        
+        // Set global references for backward compatibility
+        provider = providers[0];
+        contract = contracts[0];
+        lastKnownTokenId = 0;
+        lastProcessedTxHash = null;
+        
         // Optionally, scan for latest mints for each contract
         for (let i = 0; i < contracts.length; i++) {
             const latestMint = await getLatestMintTransactionForContract(contracts[i], providers[i]);
             if (latestMint) {
                 lastKnownTokenIds[i] = latestMint.tokenId;
                 lastProcessedTxHashes[i] = latestMint.txHash;
+                
+                // Update global variables with first contract's data
+                if (i === 0) {
+                    lastKnownTokenId = latestMint.tokenId;
+                    lastProcessedTxHash = latestMint.txHash;
+                }
             }
         }
-        console.log(`[${new Date().toISOString()}] INFO: Initialized NFT tracker for contracts: ${addresses.join(', ')}`);
+        
+        console.log(`[${new Date().toISOString()}] INFO: ✅ Initialized NFT tracker for contracts: ${addresses.join(', ')}`);
+        console.log(`[${new Date().toISOString()}] INFO: ✅ Last known token ID: ${lastKnownTokenId}`);
     } catch (error) {
-        console.error(`[${new Date().toISOString()}] ERROR: Failed to initialize NFT tracker:`, error);
+        console.error(`[${new Date().toISOString()}] ERROR: ❌ Failed to initialize NFT tracker:`, error);
         throw error;
     }
 }
@@ -291,7 +336,7 @@ async function trackNFT(client) {
             console.error(`[${new Date().toISOString()}] ERROR: ❌ Contracts not initialized`);
             return;
         }
-        const contract = contracts[0];
+        const currentContract = contracts[0];
 
         console.log(`[${new Date().toISOString()}] INFO: 🔍 Scanning for new mint transactions...`);
         
@@ -302,12 +347,12 @@ async function trackNFT(client) {
             console.log(`[${new Date().toISOString()}] INFO: 📊 No mint transactions found in scan`);
             // Send scheduled message with current total supply
             try {
-                const totalSupply = await contract.totalSupply();
+                const totalSupply = await currentContract.totalSupply();
                 const totalMints = parseInt(totalSupply.toString());
                 await sendDiscordNotification(client, { tokenId: totalMints });
             } catch (error) {
                 console.warn(`[${new Date().toISOString()}] WARN: ⚠️ Could not get total supply for scheduled message`);
-                await sendDiscordNotification(client, { tokenId: lastKnownTokenId });
+                await sendDiscordNotification(client, { tokenId: lastKnownTokenId || 0 });
             }
             return;
         }
@@ -326,7 +371,8 @@ async function trackNFT(client) {
         console.log(`[${new Date().toISOString()}] INFO: 👤 Minted to: ${latestMint.to}`);
         console.log(`[${new Date().toISOString()}] INFO: 📊 Scanned ${latestMint.blocksScannedToFind} blocks to find this mint`);
         
-        // >>>> DO NOT send any Discord message here <<<<
+        // Send scheduled message (not new mint notification)
+        await sendDiscordNotification(client, { tokenId: latestMint.tokenId });
 
         // Update tracking variables
         lastKnownTokenId = latestMint.tokenId;
@@ -398,8 +444,8 @@ async function sendDiscordNotification(client, mintData) {
  */
 async function getNFTStats() {
     try {
-        const contract = contracts[0];
-        if (!contract) {
+        const currentContract = contracts[0] || contract;
+        if (!currentContract) {
             throw new Error('Contract not initialized');
         }
 
@@ -407,8 +453,8 @@ async function getNFTStats() {
         let contractSymbol = 'Unknown';
 
         try {
-            contractName = await contract.name();
-            contractSymbol = await contract.symbol();
+            contractName = await currentContract.name();
+            contractSymbol = await currentContract.symbol();
         } catch (error) {
             console.warn(`[${new Date().toISOString()}] WARN: ⚠️ Could not get contract name/symbol`);
         }
@@ -417,8 +463,8 @@ async function getNFTStats() {
             contractName,
             contractSymbol,
             contractAddress: process.env.CONTRACT_ADDRESS,
-            lastKnownTokenId,
-            lastProcessedTxHash
+            lastKnownTokenId: lastKnownTokenId || 0,
+            lastProcessedTxHash: lastProcessedTxHash || null
         };
     } catch (error) {
         console.error(`[${new Date().toISOString()}] ERROR: ❌ Error getting NFT stats:`, error);
@@ -457,27 +503,38 @@ async function checkLatestMint() {
  */
 async function getMintsCountLast24h() {
     try {
-        const contract = contracts[0];
-        if (!contract) throw new Error('Contract not initialized');
+        const currentContract = contracts[0] || contract;
+        const currentProvider = providers[0] || provider;
+        
+        if (!currentContract || !currentProvider) {
+            console.warn(`[${new Date().toISOString()}] WARN: Contract or provider not initialized for 24h count`);
+            return 0;
+        }
+        
         const now = Math.floor(Date.now() / 1000);
         const dayAgo = now - 24 * 60 * 60;
         let blocksScanned = 0;
         let batchSize = 2000;
         let firstTokenId = null;
         let lastTokenId = null;
-        const currentBlock = await provider.getBlockNumber();
+        const currentBlock = await currentProvider.getBlockNumber();
         const maxBlocksToScan = 50000;
         let foundAny = false;
+        
         while (blocksScanned < maxBlocksToScan) {
             const fromBlock = Math.max(0, currentBlock - blocksScanned - batchSize);
             const toBlock = currentBlock - blocksScanned;
             if (fromBlock >= toBlock) break;
-            const filter = contract.filters.Transfer(ethers.constants.AddressZero, null);
-            const events = await contract.queryFilter(filter, fromBlock, toBlock);
+            
+            const zeroAddress = (ethers.constants && ethers.constants.AddressZero) || ethers.ZeroAddress || '0x0000000000000000000000000000000000000000';
+            const filter = currentContract.filters.Transfer(zeroAddress, null);
+            const events = await currentContract.queryFilter(filter, fromBlock, toBlock);
+            
             for (const event of events) {
                 const tokenId = parseInt(event.args.tokenId.toString());
-                const block = await provider.getBlock(event.blockNumber);
+                const block = await currentProvider.getBlock(event.blockNumber);
                 const ts = block.timestamp;
+                
                 if (ts >= dayAgo && ts <= now) {
                     if (!foundAny) {
                         lastTokenId = tokenId;
@@ -488,6 +545,7 @@ async function getMintsCountLast24h() {
             }
             blocksScanned += batchSize;
         }
+        
         if (!foundAny) return 0;
         return Math.abs(lastTokenId - firstTokenId) + 1;
     } catch (error) {
@@ -499,12 +557,13 @@ async function getMintsCountLast24h() {
 async function getLatestMintedTokenId(contract, provider) {
     try {
         // Scan backwards in small batches to find the most recent mint event
-        const zeroAddress = (ethers.constants && ethers.constants.AddressZero) || ethers.ZeroAddress;
+        const zeroAddress = (ethers.constants && ethers.constants.AddressZero) || ethers.ZeroAddress || '0x0000000000000000000000000000000000000000';
         const filter = contract.filters.Transfer(zeroAddress, null);
         const currentBlock = await provider.getBlockNumber();
         const batchSize = 1000;
         let fromBlock = currentBlock;
         let toBlock = currentBlock;
+        
         while (fromBlock > 0) {
             fromBlock = Math.max(0, toBlock - batchSize + 1);
             const events = await contract.queryFilter(filter, fromBlock, toBlock);
@@ -562,8 +621,6 @@ async function getLastTokenIdForContract(contract, provider) {
 async function getLatestMintTransactionForContract(contract, provider) {
     // Copy of getLatestMintTransaction, but for a specific contract/provider
     try {
-        // ... similar to getLatestMintTransaction, but use contract and provider passed in ...
-        // For brevity, you can call scanForMintTransactionForContract(contract, provider, 2000) and fallback to 20000
         const quickScan = await scanForMintTransactionForContract(contract, provider, 2000);
         if (quickScan) return quickScan;
         return await scanForMintTransactionForContract(contract, provider, 20000);
@@ -579,26 +636,32 @@ async function scanForMintTransactionForContract(contract, provider, maxBlocksTo
         let blocksScanned = 0;
         let batchSize = 1000;
         let foundMint = null;
+        
         while (blocksScanned < maxBlocksToScan && !foundMint) {
             const fromBlock = Math.max(0, currentBlock - blocksScanned - batchSize);
             const toBlock = currentBlock - blocksScanned;
             if (fromBlock >= toBlock) break;
-            const zeroAddress = (ethers.constants && ethers.constants.AddressZero) || ethers.ZeroAddress;
+            
+            const zeroAddress = (ethers.constants && ethers.constants.AddressZero) || ethers.ZeroAddress || '0x0000000000000000000000000000000000000000';
             const filter = contract.filters.Transfer(zeroAddress, null);
             const events = await contract.queryFilter(filter, fromBlock, toBlock);
+            
             if (events.length > 0) {
                 events.sort((a, b) => {
                     if (a.blockNumber !== b.blockNumber) return b.blockNumber - a.blockNumber;
                     return b.transactionIndex - a.transactionIndex;
                 });
+                
                 const latestEvent = events[0];
                 const tokenId = parseInt(latestEvent.args.tokenId.toString());
                 const txHash = latestEvent.transactionHash;
                 const blockNumber = latestEvent.blockNumber;
+                
                 const [tx, block] = await Promise.all([
                     provider.getTransaction(txHash),
                     provider.getBlock(blockNumber)
                 ]);
+                
                 foundMint = {
                     tokenId,
                     txHash,
@@ -606,7 +669,7 @@ async function scanForMintTransactionForContract(contract, provider, maxBlocksTo
                     timestamp: block.timestamp,
                     to: latestEvent.args.to,
                     gasUsed: tx.gasLimit ? tx.gasLimit.toString() : 'Unknown',
-                    gasPrice: tx.gasPrice ? ethers.utils.formatUnits(tx.gasPrice, 'gwei') : 'Unknown',
+                    gasPrice: tx.gasPrice ? (ethers.utils ? ethers.utils.formatUnits(tx.gasPrice, 'gwei') : tx.gasPrice.toString()) : 'Unknown',
                     totalEventsFound: events.length,
                     blocksScannedToFind: blocksScanned + (currentBlock - blockNumber)
                 };
