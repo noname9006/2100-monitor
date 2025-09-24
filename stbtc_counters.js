@@ -10,26 +10,32 @@ class StbtcCounters {
     /**
      * Start the STBTC counters with cron scheduling
      */
-    start() {
-        const cronSchedule = process.env.CRON_SCHEDULE_COUNTER;
-        if (!cronSchedule) {
-            console.warn(`[${new Date().toISOString()}] WARN: CRON_SCHEDULE_COUNTER not set in .env`);
-            return;
-        }
-
-        if (this.isRunning) {
-            console.warn(`[${new Date().toISOString()}] WARN: STBTC counters already running`);
-            return;
-        }
-
-        console.log(`[${new Date().toISOString()}] INFO: Starting STBTC counters with schedule: ${cronSchedule}`);
-        
-        cron.schedule(cronSchedule, async () => {
-            await this.updateAllCounters();
-        });
-
-        this.isRunning = true;
+start() {
+    const cronSchedule = process.env.CRON_SCHEDULE_COUNTER;
+    if (!cronSchedule) {
+        console.warn(`[${new Date().toISOString()}] WARN: CRON_SCHEDULE_COUNTER not set in .env`);
+        return;
     }
+
+    if (this.isRunning) {
+        console.warn(`[${new Date().toISOString()}] WARN: STBTC counters already running`);
+        return;
+    }
+
+    console.log(`[${new Date().toISOString()}] INFO: Starting STBTC counters with schedule: ${cronSchedule}`);
+    
+    // UPDATE IMMEDIATELY AT STARTUP
+    this.updateAllCounters().catch(error => {
+        console.error(`[${new Date().toISOString()}] ERROR: Failed to update STBTC counters at startup:`, error);
+    });
+    
+    // THEN SCHEDULE FOR REGULAR UPDATES
+    cron.schedule(cronSchedule, async () => {
+        await this.updateAllCounters();
+    });
+
+    this.isRunning = true;
+}
 
     /**
      * Update all STBTC counters
@@ -41,7 +47,8 @@ class StbtcCounters {
             this.updateTokenQuantityCounter(),
             this.updateHoldersCounter(),
             this.updateExchangeRateCounter(),
-            this.updateCapPercentageCounter()
+            this.updateCapPercentageCounter(),
+            this.updateYieldAprCounter()
         ]);
     }
 
@@ -49,48 +56,73 @@ class StbtcCounters {
      * Counter 1: Token quantity from ERC20 holdings
      */
     async updateTokenQuantityCounter() {
-        try {
-            const channelId = process.env.STBTC1_CHANNELID;
-            const nameTemplate = process.env.STBTC1_CHANNELNAME;
-            
-            if (!channelId || !nameTemplate) {
-                console.warn(`[${new Date().toISOString()}] WARN: STBTC1_CHANNELID or STBTC1_CHANNELNAME not set in .env`);
-                return;
-            }
-
-            const response = await axios.get('https://api.routescan.io/v2/network/mainnet/evm/3637/address/0xF4586028FFdA7Eca636864F80f8a3f2589E33795/erc20-holdings');
-            
-            const targetToken = response.data.items?.find(token => 
-                token.tokenAddress === '0x0D2437F93Fed6EA64Ef01cCde385FB1263910C56'
-            );
-
-            if (!targetToken) {
-                console.error(`[${new Date().toISOString()}] ERROR: Target token not found in holdings`);
-                return;
-            }
-
-            const tokenQuantity = parseFloat(targetToken.tokenQuantity);
-            const tokenDecimals = parseInt(targetToken.tokenDecimals || 18);
-            const stbtcDecimals = parseInt(process.env.STBTC1_DECIMALS || 2);
-
-            // Calculate actual value considering token decimals
-            const actualValue = tokenQuantity / Math.pow(10, tokenDecimals);
-            
-            // Round to specified decimals and format with fixed decimal places
-            const roundedValue = Math.round(actualValue * Math.pow(10, stbtcDecimals)) / Math.pow(10, stbtcDecimals);
-            const displayValue = roundedValue.toFixed(stbtcDecimals);
-
-            await this.updateChannelName(channelId, nameTemplate, displayValue);
-            
-            console.log(`[${new Date().toISOString()}] INFO: Updated STBTC token quantity counter: ${displayValue}`);
-            
-            // Store for cap percentage calculation (as number for calculations)
-            this.lastTokenQuantity = roundedValue;
-
-        } catch (error) {
-            console.error(`[${new Date().toISOString()}] ERROR: Failed to update token quantity counter:`, error.message);
+    try {
+        const channelId = process.env.STBTC1_CHANNELID;
+        const nameTemplate = process.env.STBTC1_CHANNELNAME;
+        
+        if (!channelId || !nameTemplate) {
+            console.warn(`[${new Date().toISOString()}] WARN: STBTC1_CHANNELID or STBTC1_CHANNELNAME not set in .env`);
+            return;
         }
+
+        // Get RPC URL from environment
+        const rpcUrl = process.env.RPC_URL;
+        if (!rpcUrl) {
+            console.error(`[${new Date().toISOString()}] ERROR: RPC_URL not set in .env`);
+            return;
+        }
+
+        // Make RPC call to get token quantity
+        const rpcPayload = {
+            jsonrpc: "2.0",
+            method: "eth_call",
+            params: [
+                {
+                    to: "0xF4586028FFdA7Eca636864F80f8a3f2589E33795",
+                    data: "0x817b1cd2"
+                },
+                "latest"
+            ],
+            id: 1
+        };
+
+        const response = await axios.post(rpcUrl, rpcPayload, {
+            headers: {
+                'Content-Type': 'application/json'
+            }
+        });
+
+        if (!response.data || !response.data.result) {
+            console.error(`[${new Date().toISOString()}] ERROR: Invalid RPC response for token quantity`);
+            return;
+        }
+
+        // Parse the hex result to get the token quantity
+        const hexResult = response.data.result;
+        const tokenQuantity = parseInt(hexResult, 16);
+
+        // Get decimals from environment variables
+        const tokenDecimals = parseInt(process.env.STBTC1_TOKEN_DECIMALS || 18);
+        const stbtcDecimals = parseInt(process.env.STBTC1_DECIMALS || 2);
+
+        // Calculate actual value considering token decimals
+        const actualValue = tokenQuantity / Math.pow(10, tokenDecimals);
+        
+        // Round to specified decimals and format with fixed decimal places
+        const roundedValue = Math.round(actualValue * Math.pow(10, stbtcDecimals)) / Math.pow(10, stbtcDecimals);
+        const displayValue = roundedValue.toFixed(stbtcDecimals);
+
+        await this.updateChannelName(channelId, nameTemplate, displayValue);
+        
+        console.log(`[${new Date().toISOString()}] INFO: Updated STBTC token quantity counter: ${displayValue} (raw: ${tokenQuantity})`);
+        
+        // Store for cap percentage calculation (as number for calculations)
+        this.lastTokenQuantity = roundedValue;
+
+    } catch (error) {
+        console.error(`[${new Date().toISOString()}] ERROR: Failed to update token quantity counter:`, error.message);
     }
+}
 
     /**
      * Counter 2: Token holders count
@@ -207,6 +239,50 @@ class StbtcCounters {
 
         } catch (error) {
             console.error(`[${new Date().toISOString()}] ERROR: Failed to update cap percentage counter:`, error.message);
+        }
+    }
+
+    /**
+     * Counter 5: Yield APR from API
+     */
+    async updateYieldAprCounter() {
+        try {
+            const channelId = process.env.STBTC5_CHANNELID;
+            const nameTemplate = process.env.STBTC5_CHANNELNAME;
+            
+            if (!channelId || !nameTemplate) {
+                console.warn(`[${new Date().toISOString()}] WARN: STBTC5_CHANNELID or STBTC5_CHANNELNAME not set in .env`);
+                return;
+            }
+
+            const response = await axios.get('https://sidecar.botanixlabs.com/api/yieldApr');
+            
+            if (!response.data || !response.data.apr) {
+                console.error(`[${new Date().toISOString()}] ERROR: Invalid yield APR data`);
+                return;
+            }
+
+            // Extract the numeric value from the apr field
+            const aprValue = parseFloat(response.data.apr);
+            
+            if (isNaN(aprValue)) {
+                console.error(`[${new Date().toISOString()}] ERROR: APR value is not a valid number`);
+                return;
+            }
+
+            // Get decimals from env or default to 2
+            const stbtcDecimals = parseInt(process.env.STBTC5_DECIMALS || 2);
+            
+            // Round to specified decimals
+            const roundedValue = Math.round(aprValue * Math.pow(10, stbtcDecimals)) / Math.pow(10, stbtcDecimals);
+            const displayValue = roundedValue.toFixed(stbtcDecimals);
+
+            await this.updateChannelName(channelId, nameTemplate, displayValue);
+            
+            console.log(`[${new Date().toISOString()}] INFO: Updated STBTC yield APR counter: ${displayValue}%`);
+
+        } catch (error) {
+            console.error(`[${new Date().toISOString()}] ERROR: Failed to update yield APR counter:`, error.message);
         }
     }
 

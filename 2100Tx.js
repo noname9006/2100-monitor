@@ -9,7 +9,7 @@ class TransactionTracker {
     constructor() {
         this.address = process.env.ADDRESS1;
         this.rpcUrl = process.env.RPC_URL;
-        this.cronSchedule = process.env.CRON_SCHEDULE_COUNTER;
+this.cronSchedule = process.env.CRON_SCHEDULE_BLOCKCHAIN;
         this.startBlock = parseInt(process.env.START_BLOCK || '1'); // NEW: Configurable start block
         this.csvFilename = null;
         this.progressFilename = null;

@@ -5,7 +5,7 @@ const { createSatoshiSpinEmbed } = require('./spin.js');
 const { updateCounters } = require('./counters.js');
 const { StbtcCounters } = require('./stbtc_counters.js');
 
-// ADD THIS LINE - Import the transaction tracker
+// Import the transaction tracker
 const { initializeTransactionTracker, startTransactionTracking } = require('./2100Tx.js');
 
 require('dotenv').config();
@@ -29,14 +29,19 @@ client.once('ready', async () => {
     // Initialize NFT tracker
     await initializeNFTTracker();
     
-    // ADD THIS BLOCK - Initialize transaction tracker
-    try {
-        console.log(`[${new Date().toISOString()}] INFO: 🚀 Initializing 2100 transaction tracker...`);
-        await initializeTransactionTracker();
-        startTransactionTracking();
-        console.log(`[${new Date().toISOString()}] INFO: ✅ 2100 transaction tracker initialized and started`);
-    } catch (error) {
-        console.error(`[${new Date().toISOString()}] ERROR: ❌ Failed to initialize 2100 transaction tracker:`, error.message);
+    // Initialize transaction tracker - Check 2100TX environment variable
+    const enable2100Tx = process.env.TX2100;
+    if (enable2100Tx === '1') {
+        try {
+            console.log(`[${new Date().toISOString()}] INFO: 🚀 2100TX enabled - Initializing 2100 transaction tracker...`);
+            await initializeTransactionTracker();
+            startTransactionTracking();
+            console.log(`[${new Date().toISOString()}] INFO: ✅ 2100 transaction tracker initialized and started`);
+        } catch (error) {
+            console.error(`[${new Date().toISOString()}] ERROR: ❌ Failed to initialize 2100 transaction tracker:`, error.message);
+        }
+    } else {
+        console.log(`[${new Date().toISOString()}] INFO: ℹ️ 2100TX disabled (TX2100=${enable2100Tx}) - Skipping 2100 transaction tracker initialization`);
     }
     
     // Initialize STBTC counters
