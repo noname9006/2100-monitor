@@ -2,161 +2,8 @@ const fs = require('fs');
 const readline = require('readline');
 const path = require('path');
 const https = require('https');
-const os = require('os');
 
 require('dotenv').config();
-
-class MemoryManager {
-    constructor(maxMemoryMB) {
-        this.maxMemoryMB = maxMemoryMB;
-        this.maxMemoryBytes = maxMemoryMB * 1024 * 1024;
-        this.checkInterval = 1000;
-        
-        // Ultra-conservative thresholds for low memory systems
-        this.ultraLowMemory = maxMemoryMB < 1024 || process.env.ULTRA_LOW_MEMORY === 'true';
-        
-        if (this.ultraLowMemory) {
-            this.warningThreshold = 0.25;   // 25%
-            this.criticalThreshold = 0.4;   // 40%
-            this.emergencyThreshold = 0.55; // 55%
-            this.panicThreshold = 0.7;      // 70%
-            this.checkInterval = 500;
-            this.disableWalletTracking = true;
-        } else {
-            this.warningThreshold = 0.6;
-            this.criticalThreshold = 0.75;
-            this.emergencyThreshold = 0.85;
-            this.panicThreshold = 0.95;
-            this.disableWalletTracking = false;
-        }
-        
-        this.lastGcTime = 0;
-        this.gcCooldown = 1000;
-        this.gcAvailable = typeof global.gc === 'function';
-        
-        console.log(`[${new Date().toISOString()}] INFO: # Memory limit: ${maxMemoryMB}MB`);
-        console.log(`[${new Date().toISOString()}] INFO: # Ultra-low memory: ${this.ultraLowMemory ? 'YES' : 'NO'}`);
-        console.log(`[${new Date().toISOString()}] INFO: # GC available: ${this.gcAvailable ? 'YES' : 'NO'}`);
-        console.log(`[${new Date().toISOString()}] INFO: # Wallet tracking: ${this.disableWalletTracking ? 'DISABLED' : 'ENABLED'}`);
-        console.log(`[${new Date().toISOString()}] INFO: # Thresholds: ${(this.warningThreshold*100).toFixed(0)}%/${(this.criticalThreshold*100).toFixed(0)}%/${(this.emergencyThreshold*100).toFixed(0)}%/${(this.panicThreshold*100).toFixed(0)}%`);
-        
-        this.startMonitoring();
-        
-        process.on('exit', () => this.cleanup());
-        process.on('SIGINT', () => {
-            this.cleanup();
-            process.exit(0);
-        });
-    }
-
-    startMonitoring() {
-        setInterval(() => {
-            this.checkMemoryUsage();
-        }, this.checkInterval);
-    }
-
-    checkMemoryUsage() {
-        const memUsage = process.memoryUsage();
-        const usedMB = Math.round(memUsage.heapUsed / 1024 / 1024);
-        const usage = memUsage.heapUsed / this.maxMemoryBytes;
-        
-        if (usage > this.panicThreshold) {
-            console.error(`[${new Date().toISOString()}] PANIC: Memory ${(usage * 100).toFixed(1)}% (${usedMB}MB)`);
-            
-            if (usage > 2.0) {
-                console.error(`[${new Date().toISOString()}] FATAL: Memory over 200% - forcing exit`);
-                process.exit(1);
-            }
-            
-            return this.panicCleanup();
-        } else if (usage > this.emergencyThreshold) {
-            console.warn(`[${new Date().toISOString()}] EMERGENCY: Memory ${(usage * 100).toFixed(1)}% (${usedMB}MB)`);
-            return this.emergencyCleanup();
-        } else if (usage > this.criticalThreshold) {
-            console.warn(`[${new Date().toISOString()}] CRITICAL: Memory ${(usage * 100).toFixed(1)}% (${usedMB}MB)`);
-            return this.aggressiveCleanup();
-        } else if (usage > this.warningThreshold) {
-            if (Date.now() % 10000 < this.checkInterval) {
-                console.warn(`[${new Date().toISOString()}] WARN: Memory ${(usage * 100).toFixed(1)}% (${usedMB}MB)`);
-            }
-            this.optimizeMemory();
-        }
-        
-        return false;
-    }
-
-    panicCleanup() {
-        if (this.gcAvailable) {
-            for (let i = 0; i < 5; i++) {
-                global.gc();
-            }
-        }
-        return true;
-    }
-
-    emergencyCleanup() {
-        if (this.gcAvailable) {
-            for (let i = 0; i < 3; i++) {
-                global.gc();
-            }
-        }
-        return true;
-    }
-
-    aggressiveCleanup() {
-        this.forceGarbageCollection();
-        return false;
-    }
-
-    forceGarbageCollection() {
-        const now = Date.now();
-        if (now - this.lastGcTime < this.gcCooldown) {
-            return;
-        }
-        
-        if (this.gcAvailable) {
-            global.gc();
-            this.lastGcTime = now;
-        }
-    }
-
-    optimizeMemory() {
-        if (this.gcAvailable && Date.now() - this.lastGcTime > this.gcCooldown) {
-            global.gc();
-            this.lastGcTime = Date.now();
-        }
-    }
-
-    cleanup() {
-        // No cleanup needed for ultra-lean version
-    }
-
-    getMemoryInfo() {
-        const memUsage = process.memoryUsage();
-        return {
-            heapUsedMB: Math.round(memUsage.heapUsed / 1024 / 1024),
-            heapTotalMB: Math.round(memUsage.heapTotal / 1024 / 1024),
-            usagePercent: (memUsage.heapUsed / this.maxMemoryBytes * 100).toFixed(1),
-            ultraLowMemory: this.ultraLowMemory,
-            gcAvailable: this.gcAvailable
-        };
-    }
-
-    isEmergencyState() {
-        const memUsage = process.memoryUsage();
-        return (memUsage.heapUsed / this.maxMemoryBytes) > this.emergencyThreshold;
-    }
-
-    isCriticalState() {
-        const memUsage = process.memoryUsage();
-        return (memUsage.heapUsed / this.maxMemoryBytes) > this.criticalThreshold;
-    }
-
-    isPanicState() {
-        const memUsage = process.memoryUsage();
-        return (memUsage.heapUsed / this.maxMemoryBytes) > this.panicThreshold;
-    }
-}
 
 class ComprehensiveTransactionAnalyzer {
     constructor(csvFilename) {
@@ -164,37 +11,14 @@ class ComprehensiveTransactionAnalyzer {
         this.address = this.extractAddressFromFilename(csvFilename);
         this.agentAddress = process.env.AGENT ? process.env.AGENT.toLowerCase() : null;
         this.processedCount = 0;
-        this.duplicateTransactions = new Map();
+        this.duplicateTransactions = new Map(); // Track duplicate txids
         this.duplicateCount = 0;
         
-        // Initialize memory manager first
-        const maxMemoryMB = parseInt(process.env.MAX_MEM_ANALYZE) || 2048;
-        this.memoryManager = new MemoryManager(maxMemoryMB);
-        
-        // Ultra-conservative settings for low memory
-        this.ultraLowMemory = this.memoryManager.ultraLowMemory;
-        this.disableWalletTracking = this.memoryManager.disableWalletTracking;
-        
-        if (this.ultraLowMemory) {
-            this.chunkSize = Math.min(500, Math.max(100, Math.floor(maxMemoryMB / 5)));
-            this.maxWalletSize = 100;
-            this.skipDuplicateCheck = true;
-            this.streamingOnly = true;
-            this.disableTopUpStorage = true;
-            this.maxDailyEntries = 50;
-        } else {
-            this.chunkSize = parseInt(process.env.CHUNK_SIZE) || 10000;
-            this.maxWalletSize = 5000;
-            this.skipDuplicateCheck = false;
-            this.streamingOnly = false;
-            this.disableTopUpStorage = false;
-            this.maxDailyEntries = 200;
-        }
-        
-        this.enableStreaming = process.env.ENABLE_STREAMING !== 'false';
+        // DEBUG flag - defaults to 0 (off) if not set
         this.DEBUG = process.env.DEBUG === '1';
+        
+        // Initialize txCountData as empty, will be populated in init()
         this.txCountData = new Map();
-        this.currentChunk = 0;
         
         // Define thresholds in BTC
         this.THRESHOLDS = {
@@ -204,20 +28,25 @@ class ComprehensiveTransactionAnalyzer {
             TOP_UP_MIN: 0.000001
         };
         
-        // Time cutoffs
+        // Time cutoffs (full calendar days in UTC) - EXCLUDE TODAY
         const now = new Date();
+        
+        // Get yesterday as the most recent complete day
         const yesterday = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - 1));
         const yesterdayEnd = new Date(yesterday);
         yesterdayEnd.setUTCHours(23, 59, 59, 999);
         
+        // Calculate start of day 7 days before yesterday (8 days ago from today)
         const sevenDaysAgo = new Date(yesterday);
-        sevenDaysAgo.setUTCDate(yesterday.getUTCDate() - 6);
+        sevenDaysAgo.setUTCDate(yesterday.getUTCDate() - 6); // 7 days total including yesterday
         
+        // Calculate start of day 14 days before yesterday (15 days ago from today)
         const fourteenDaysAgo = new Date(yesterday);
-        fourteenDaysAgo.setUTCDate(yesterday.getUTCDate() - 13);
+        fourteenDaysAgo.setUTCDate(yesterday.getUTCDate() - 13); // 14 days total including yesterday
         
+        // Calculate start of day 30 days before yesterday (31 days ago from today)  
         const thirtyDaysAgo = new Date(yesterday);
-        thirtyDaysAgo.setUTCDate(yesterday.getUTCDate() - 29);
+        thirtyDaysAgo.setUTCDate(yesterday.getUTCDate() - 29); // 30 days total including yesterday
         
         this.timeCutoffs = {
             last7Days: Math.floor(sevenDaysAgo.getTime() / 1000),
@@ -232,33 +61,54 @@ class ComprehensiveTransactionAnalyzer {
         // Store last 14 full days for breakdown
         this.last14DaysBreakdown = new Map();
         
+        // Initialize analytics containers
         this.initializeAnalytics();
         
-        console.log(`[${new Date().toISOString()}] INFO: # Analyzer initialized for: ${this.address}`);
-        console.log(`[${new Date().toISOString()}] INFO: # Ultra-low memory mode: ${this.ultraLowMemory ? 'YES' : 'NO'}`);
-        console.log(`[${new Date().toISOString()}] INFO: # Wallet tracking: ${this.disableWalletTracking ? 'DISABLED' : 'ENABLED'}`);
-        console.log(`[${new Date().toISOString()}] INFO: # Chunk size: ${this.chunkSize} lines`);
-        console.log(`[${new Date().toISOString()}] INFO: # Skip duplicate check: ${this.skipDuplicateCheck ? 'YES' : 'NO'}`);
-        console.log(`[${new Date().toISOString()}] INFO: # Daily analytics enabled: YES (with memory limits)`);
+        console.log(`[${new Date().toISOString()}] INFO: # ComprehensiveTransactionAnalyzer initialized for address: ${this.address}`);
+        console.log(`[${new Date().toISOString()}] INFO: # CSV file: ${this.csvFilename}`);
+        console.log(`[${new Date().toISOString()}] INFO: # Current time: ${now.toISOString()}`);
+        console.log(`[${new Date().toISOString()}] INFO: # Most recent complete day: ${yesterday.toISOString().split('T')[0]}`);
+        console.log(`[${new Date().toISOString()}] INFO: # Last 7 days cutoff: ${new Date(this.timeCutoffs.last7Days * 1000).toISOString()} (7 complete days)`);
+        console.log(`[${new Date().toISOString()}] INFO: # Last 14 days cutoff: ${new Date(this.timeCutoffs.last14Days * 1000).toISOString()} (14 complete days)`);
+        console.log(`[${new Date().toISOString()}] INFO: # Last 30 days cutoff: ${new Date(this.timeCutoffs.last30Days * 1000).toISOString()} (30 complete days)`);
+        console.log(`[${new Date().toISOString()}] INFO: # Excluding today (${now.toISOString().split('T')[0]}) as incomplete`);
         
         if (this.agentAddress) {
-            console.log(`[${new Date().toISOString()}] INFO: # Agent address: ${this.agentAddress}`);
+            console.log(`[${new Date().toISOString()}] INFO: # Agent address configured: ${this.agentAddress}`);
+        } else {
+            console.log(`[${new Date().toISOString()}] INFO: # No agent address configured (AGENT env var not set)`);
         }
+        
+        // Show DEBUG status
+        console.log(`[${new Date().toISOString()}] INFO: # Debug logging: ${this.DEBUG ? 'ENABLED' : 'DISABLED'}`);
     }
 
+    // Debug logging helper
     debugLog(message) {
         if (this.DEBUG) {
             console.log(`[${new Date().toISOString()}] DEBUG: ${message}`);
         }
     }
 
+    // Add this new method for initialization
     async init() {
+        // Parse TX_COUNT environment variable
         this.txCountData = await this.parseTxCountData();
+        
         if (this.txCountData.size > 0) {
-            console.log(`[${new Date().toISOString()}] INFO: # TX_COUNT data loaded: ${this.txCountData.size} days`);
+            console.log(`[${new Date().toISOString()}] INFO: # TX_COUNT data loaded for ${this.txCountData.size} days`);
+            
+            if (this.DEBUG) {
+                // DEBUG: Show a few sample dates to verify alignment
+                const sampleDates = Array.from(this.txCountData.keys()).slice(0, 3);
+                this.debugLog(`# Sample TX_COUNT dates: ${sampleDates.join(', ')}`);
+            }
+        } else {
+            console.log(`[${new Date().toISOString()}] INFO: # No TX_COUNT data available (TX_COUNT env var not set)`);
         }
     }
 
+    // Helper function to make HTTPS requests
     httpsGet(url) {
         return new Promise((resolve, reject) => {
             https.get(url, (res) => {
@@ -288,52 +138,70 @@ class ComprehensiveTransactionAnalyzer {
         }
         
         try {
+            // Check if TX_COUNT is a URL
             if (txCountString.startsWith('http')) {
-                console.log(`[${new Date().toISOString()}] INFO: # Fetching TX_COUNT from API...`);
+                console.log(`[${new Date().toISOString()}] INFO: # Fetching TX_COUNT data from API: ${txCountString}`);
+                
+                // Fetch data from API using built-in https module
                 const apiData = await this.httpsGet(txCountString);
                 
+                // Parse API response format: [["2025-09-23T00:00:00.000Z","46814"], ...]
                 for (const entry of apiData) {
                     if (Array.isArray(entry) && entry.length >= 2) {
-                        const date = new Date(entry[0]);
+                        const dateStr = entry[0];
+                        const count = parseInt(entry[1]);
+                        
+                        // Use the date as-is for proper alignment
+                        const date = new Date(dateStr);
                         const dayKey = date.toISOString().split('T')[0];
-                        txCountData.set(dayKey, parseInt(entry[1]));
+                        
+                        txCountData.set(dayKey, count);
                     }
                 }
             } else {
+                // Handle raw data format: "2025-09-23T00:00:00.000Z","46814","2025-09-22T00:00:00.000Z","45821"
                 const entries = txCountString.split(',');
                 for (const entry of entries) {
                     const trimmed = entry.trim();
                     if (!trimmed) continue;
                     
+                    // Extract date and count from format like "2025-09-23T00:00:00.000Z","46814"
                     const match = trimmed.match(/"([^"]+)","(\d+)"/);
                     if (match) {
                         const dateStr = match[1];
                         const count = parseInt(match[2]);
+                        
+                        // Use the date as-is for proper alignment
                         const date = new Date(dateStr);
                         const dayKey = date.toISOString().split('T')[0];
+                        
                         txCountData.set(dayKey, count);
                     }
                 }
             }
-            console.log(`[${new Date().toISOString()}] INFO: # Parsed TX_COUNT: ${txCountData.size} days`);
+            
+            console.log(`[${new Date().toISOString()}] INFO: # Parsed TX_COUNT data for ${txCountData.size} days`);
         } catch (error) {
-            console.warn(`[${new Date().toISOString()}] WARN: # TX_COUNT error: ${error.message}`);
+            console.warn(`[${new Date().toISOString()}] WARN: # Error parsing TX_COUNT data: ${error.message}`);
         }
         
         return txCountData;
     }
 
+    // Better period calculation with proper date handling
     getTotalTxCountForPeriod(startTimestamp, endTimestamp) {
         let total = 0;
         const startDate = new Date(startTimestamp * 1000);
         const endDate = new Date(endTimestamp * 1000);
         
+        // Convert to date strings for comparison
         const startDateStr = startDate.toISOString().split('T')[0];
         const endDateStr = endDate.toISOString().split('T')[0];
         
         this.debugLog(`# TX_COUNT period: ${startDateStr} to ${endDateStr}`);
         
         for (const [dayKey, count] of this.txCountData) {
+            // Use string comparison for date ranges (YYYY-MM-DD format)
             if (dayKey >= startDateStr && dayKey <= endDateStr) {
                 total += count;
                 this.debugLog(`# Including ${dayKey}: ${count} txs`);
@@ -375,12 +243,14 @@ class ComprehensiveTransactionAnalyzer {
 
     createEmptyStats() {
         return {
+            // Incoming transaction categories
             satWheel: {
                 totalTx: 0,
                 totalAmount: 0,
                 wallets: new Map(),
                 oneSatTx: 0,
                 tenSatsTx: 0,
+                // Agent tracking for 1 sat only
                 oneSatUserTx: 0,
                 oneSatAgentTx: 0,
                 userAmount: 0,
@@ -398,12 +268,14 @@ class ComprehensiveTransactionAnalyzer {
                 smallestTopUp: Infinity,
                 transactions: []
             },
+            // Track uncategorized incoming transactions
             uncategorizedIncoming: {
                 totalTx: 0,
                 totalAmount: 0,
                 wallets: new Map(),
-                valueRanges: new Map()
+                valueRanges: new Map() // Track value distribution only
             },
+            // Total incoming tracking
             allIncoming: {
                 totalTx: 0,
                 totalAmount: 0,
@@ -414,6 +286,7 @@ class ComprehensiveTransactionAnalyzer {
                 totalAmount: 0,
                 wallets: new Map()
             },
+            // Outgoing transaction stats
             payouts: {
                 totalTx: 0,
                 totalAmount: 0,
@@ -425,6 +298,7 @@ class ComprehensiveTransactionAnalyzer {
                 totalTx: 0,
                 totalAmount: 0
             },
+            // Additional stats
             totalTransactions: 0,
             earliestTimestamp: Infinity,
             latestTimestamp: 0,
@@ -435,586 +309,7 @@ class ComprehensiveTransactionAnalyzer {
         };
     }
 
-    // Daily analytics helpers
-    getDayKey(timestamp) {
-        const date = new Date(timestamp * 1000);
-        return date.toISOString().split('T')[0];
-    }
-
-    getWeekdayName(dateString) {
-        const date = new Date(dateString + 'T00:00:00.000Z');
-        const weekdays = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
-        return weekdays[date.getUTCDay()];
-    }
-
-    // Calculate period averages with proper period mapping
-    calculatePeriodAverages(periodStats, dayCount) {
-        if (dayCount === 0) return null;
-        
-        const now = new Date();
-        const yesterday = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - 1));
-        
-        const cutoffDate = new Date(yesterday);
-        cutoffDate.setUTCDate(yesterday.getUTCDate() - (dayCount - 1));
-        const cutoffTimestamp = Math.floor(cutoffDate.getTime() / 1000);
-        
-        this.debugLog(`# Calculating ${dayCount}-day averages from ${cutoffDate.toISOString()} to ${yesterday.toISOString()} (excluding today)`);
-        
-        const relevantDays = Array.from(this.dailyAnalytics.entries())
-            .filter(([dateStr, stats]) => {
-                const dayDate = new Date(dateStr + 'T00:00:00.000Z');
-                const dayTimestamp = Math.floor(dayDate.getTime() / 1000);
-                const yesterdayTimestamp = Math.floor(yesterday.getTime() / 1000);
-                
-                return dayTimestamp >= cutoffTimestamp && dayTimestamp <= yesterdayTimestamp;
-            });
-        
-        if (relevantDays.length === 0) {
-            this.debugLog(`# No relevant complete days found for ${dayCount}-day period`);
-            return null;
-        }
-        
-        const actualDays = relevantDays.length;
-        this.debugLog(`# Found ${actualDays} complete days for ${dayCount}-day period (excluding today)`);
-        
-        let totalTransactions = 0;
-        let totalSatWheelTx = 0;
-        let totalUserTx = 0;
-        let totalAgentTx = 0;
-        let totalGuessTheBlock = 0;
-        let totalTxCountData = 0;
-        
-        const allUniqueIncomingWallets = new Set();
-        
-        relevantDays.forEach(([dateStr, dayStats]) => {
-            totalTransactions += dayStats.totalTransactions;
-            totalSatWheelTx += dayStats.satWheel.totalTx;
-            totalUserTx += (dayStats.satWheel.oneSatUserTx + dayStats.satWheel.tenSatsTx);
-            totalAgentTx += dayStats.satWheel.oneSatAgentTx;
-            totalGuessTheBlock += dayStats.guessTheBlock.totalTx;
-            
-            const dayTxCount = this.getTxCountForDay(dateStr);
-            totalTxCountData += dayTxCount;
-            
-            if (this.DEBUG) {
-                this.debugLog(`# Complete day ${dateStr}: Our=${dayStats.totalTransactions}, Network=${dayTxCount}`);
-            }
-            
-            if (!this.disableWalletTracking) {
-                dayStats.allIncoming.wallets.forEach((_, wallet) => allUniqueIncomingWallets.add(wallet));
-            }
-        });
-        
-        const avgTransactions = Math.round(totalTransactions / actualDays);
-        const avgUniqueWallets = this.disableWalletTracking ? 'N/A' : Math.round(allUniqueIncomingWallets.size / actualDays);
-        const avgSatWheelTx = Math.round(totalSatWheelTx / actualDays);
-        const avgUserTx = Math.round(totalUserTx / actualDays);
-        const avgAgentTx = Math.round(totalAgentTx / actualDays);
-        const avgGuessTheBlock = Math.round(totalGuessTheBlock / actualDays);
-        const avgTxCountData = Math.round(totalTxCountData / actualDays);
-        
-        const sharePercentage = this.calculateSharePercentage(totalTransactions, totalTxCountData);
-        
-        this.debugLog(`# ${dayCount}-day totals (complete days only): Our=${totalTransactions}, Network=${totalTxCountData}, Share=${sharePercentage}%`);
-        
-        return {
-            avgTransactions,
-            avgUniqueWallets,
-            avgSatWheelTx,
-            avgUserTx,
-            avgAgentTx,
-            avgGuessTheBlock,
-            avgTxCountData,
-            sharePercentage,
-            actualDays
-        };
-    }
-
-    // Update daily stats with memory management
-    updateDailyStats(tx) {
-        const dayKey = this.getDayKey(tx.timestamp);
-        
-        // Memory-conscious daily analytics
-        if (this.dailyAnalytics.size >= this.maxDailyEntries) {
-            const oldestKeys = Array.from(this.dailyAnalytics.keys())
-                .sort()
-                .slice(0, Math.floor(this.maxDailyEntries * 0.2));
-            oldestKeys.forEach(key => this.dailyAnalytics.delete(key));
-        }
-        
-        if (!this.dailyAnalytics.has(dayKey)) {
-            this.dailyAnalytics.set(dayKey, this.createEmptyStats());
-        }
-        
-        const dailyStats = this.dailyAnalytics.get(dayKey);
-        this.processDailyTransaction(tx, dailyStats);
-        
-        // Also track for last 14 days breakdown if within range
-        if (tx.timestamp >= this.timeCutoffs.last14Days) {
-            if (!this.last14DaysBreakdown.has(dayKey)) {
-                this.last14DaysBreakdown.set(dayKey, this.createEmptyStats());
-            }
-            const breakdownStats = this.last14DaysBreakdown.get(dayKey);
-            this.processDailyTransaction(tx, breakdownStats);
-        }
-    }
-
-    processDailyTransaction(tx, stats) {
-        const isIncoming = tx.to === this.address;
-        const isOutgoing = tx.from === this.address;
-        
-        if (!isIncoming && !isOutgoing) return;
-        if (tx.value <= 0 || tx.value < 1e-18) return;
-
-        stats.totalTransactions++;
-        stats.earliestTimestamp = Math.min(stats.earliestTimestamp, tx.timestamp);
-        stats.latestTimestamp = Math.max(stats.latestTimestamp, tx.timestamp);
-        stats.blockRange.min = Math.min(stats.blockRange.min, tx.blockNumber);
-        stats.blockRange.max = Math.max(stats.blockRange.max, tx.blockNumber);
-        
-        if (isIncoming) {
-            this.processIncomingTransaction(tx, stats);
-        } else if (isOutgoing) {
-            this.processOutgoingTransaction(tx, stats);
-        }
-    }
-
-    // FIXED: Added the missing updateWalletMapUltraLean method
-    updateWalletMapUltraLean(walletMap, address, value) {
-        if (this.disableWalletTracking) {
-            // In ultra-low memory mode, just track unique count without storing details
-            if (!this.uniqueAddressesSeen) {
-                this.uniqueAddressesSeen = new Set();
-            }
-            this.uniqueAddressesSeen.add(address);
-            
-            // Periodically clear the Set to save memory but keep total count
-            if (this.uniqueAddressesSeen.size >= 1000) {
-                this.totalUniqueAddresses = (this.totalUniqueAddresses || 0) + this.uniqueAddressesSeen.size;
-                this.uniqueAddressesSeen.clear();
-            }
-            return;
-        }
-        
-        // Original logic for normal mode
-        if (walletMap.size >= this.maxWalletSize) {
-            const keysToRemove = Array.from(walletMap.keys()).slice(0, Math.floor(this.maxWalletSize * 0.2));
-            keysToRemove.forEach(key => walletMap.delete(key));
-        }
-        
-        if (!walletMap.has(address)) {
-            walletMap.set(address, { count: 0, totalValue: 0, firstSeen: Date.now(), lastSeen: Date.now() });
-        }
-        const wallet = walletMap.get(address);
-        wallet.count++;
-        wallet.totalValue += value;
-        wallet.lastSeen = Date.now();
-    }
-
-    // Ultra-streamlined analysis - skip duplicate check
-    async analyzeStreaming() {
-        if (!this.skipDuplicateCheck) {
-            console.log(`[${new Date().toISOString()}] INFO: # Checking duplicates...`);
-            await this.checkForDuplicates();
-        } else {
-            console.log(`[${new Date().toISOString()}] INFO: # Skipping duplicate check (ultra-low memory mode)`);
-        }
-        
-        return new Promise((resolve, reject) => {
-            try {
-                console.log(`[${new Date().toISOString()}] INFO: # Starting ultra-conservative analysis...`);
-                
-                const fileStream = fs.createReadStream(this.csvFilename);
-                const rl = readline.createInterface({
-                    input: fileStream,
-                    crlfDelay: Infinity
-                });
-
-                let isFirstLine = true;
-                let lineCount = 0;
-                let errorCount = 0;
-                let excludedCount = 0;
-                let totalRelevantTransactions = 0;
-
-                rl.on('line', (line) => {
-                    try {
-                        lineCount++;
-                        
-                        if (isFirstLine) {
-                            isFirstLine = false;
-                            return;
-                        }
-
-                        const trimmedLine = line.trim();
-                        if (!trimmedLine) return;
-
-                        const columns = trimmedLine.split(',');
-                        if (columns.length >= 9) {
-                            const tx = {
-                                blockNumber: parseInt(columns[0]),
-                                transactionHash: columns[1],
-                                from: columns[2].toLowerCase(),
-                                to: columns[3].toLowerCase(),
-                                value: parseFloat(columns[4]),
-                                gasUsed: parseInt(columns[5]) || 0,
-                                gasPrice: parseInt(columns[6]) || 0,
-                                timestamp: parseInt(columns[7]),
-                                status: columns[8]
-                            };
-                            
-                            if (tx.status === 'success' && !isNaN(tx.value) && !isNaN(tx.timestamp) && !isNaN(tx.blockNumber)) {
-                                const isRelevant = (tx.to === this.address || tx.from === this.address);
-                                
-                                if (isRelevant) {
-                                    totalRelevantTransactions++;
-                                    
-                                    const isFromToday = tx.timestamp > this.timeCutoffs.yesterdayEnd;
-                                    
-                                    if (isFromToday) {
-                                        excludedCount++;
-                                        this.debugLog(`# Excluding transaction from incomplete day: ${new Date(tx.timestamp * 1000).toISOString()}`);
-                                    } else {
-                                        this.processTransactionUltraLean(tx);
-                                        this.processedCount++;
-                                    }
-                                }
-                            }
-                        }
-
-                        // Very frequent memory checks
-                        if (lineCount % 1000 === 0) {
-                            if (this.memoryManager.isPanicState()) {
-                                console.error(`[${new Date().toISOString()}] PANIC: # Forcing aggressive cleanup at line ${lineCount}`);
-                                this.aggressiveCleanupDuringProcessing();
-                            }
-                            
-                            if (lineCount % 50000 === 0) {
-                                const memInfo = this.memoryManager.getMemoryInfo();
-                                console.log(`[${new Date().toISOString()}] INFO: # Line ${lineCount.toLocaleString()}, Memory: ${memInfo.heapUsedMB}MB (${memInfo.usagePercent}%)`);
-                            }
-                        }
-
-                    } catch (error) {
-                        errorCount++;
-                        if (errorCount <= 5) {
-                            console.warn(`[${new Date().toISOString()}] WARN: # Error line ${lineCount}: ${error.message}`);
-                        }
-                    }
-                });
-
-                rl.on('close', () => {
-                    console.log(`[${new Date().toISOString()}] INFO: # Processed ${this.processedCount.toLocaleString()} transactions`);
-                    console.log(`[${new Date().toISOString()}] INFO: # Excluded ${excludedCount.toLocaleString()} from today`);
-                    if (errorCount > 0) {
-                        console.log(`[${new Date().toISOString()}] WARN: # ${errorCount} parsing errors`);
-                    }
-                    resolve();
-                });
-
-                rl.on('error', (error) => {
-                    console.error(`[${new Date().toISOString()}] ERROR: # File error:`, error);
-                    reject(error);
-                });
-
-            } catch (error) {
-                console.error(`[${new Date().toISOString()}] ERROR: # Setup error:`, error);
-                reject(error);
-            }
-        });
-    }
-
-    // Ultra-lean transaction processing with daily analytics
-    processTransactionUltraLean(tx) {
-        const isIncoming = tx.to === this.address;
-        const isOutgoing = tx.from === this.address;
-        
-        if (!isIncoming && !isOutgoing) return;
-        if (tx.value <= 0 || tx.value < 1e-18) return;
-
-        // Update daily analytics even in ultra-low memory mode
-        this.updateDailyStats(tx);
-
-        // Process for time periods
-        const periods = ['allTime'];
-        if (tx.timestamp >= this.timeCutoffs.last30Days) periods.push('last30Days');
-        if (tx.timestamp >= this.timeCutoffs.last14Days) periods.push('last14Days');
-        if (tx.timestamp >= this.timeCutoffs.last7Days) periods.push('last7Days');
-
-        for (const period of periods) {
-            const stats = this.analytics[period];
-            
-            stats.totalTransactions++;
-            stats.earliestTimestamp = Math.min(stats.earliestTimestamp, tx.timestamp);
-            stats.latestTimestamp = Math.max(stats.latestTimestamp, tx.timestamp);
-            stats.blockRange.min = Math.min(stats.blockRange.min, tx.blockNumber);
-            stats.blockRange.max = Math.max(stats.blockRange.max, tx.blockNumber);
-            
-            if (isIncoming) {
-                this.processIncomingTransactionUltraLean(tx, stats);
-            } else if (isOutgoing) {
-                this.processOutgoingTransactionUltraLean(tx, stats);
-            }
-        }
-    }
-
-    processIncomingTransaction(tx, stats) {
-        stats.allIncoming.totalTx++;
-        stats.allIncoming.totalAmount += tx.value;
-        this.updateWalletMapUltraLean(stats.allIncoming.wallets, tx.from, tx.value);
-
-        const isFromAgent = this.agentAddress && tx.from === this.agentAddress;
-
-        if (this.isFloatEqual(tx.value, this.THRESHOLDS.ONE_SAT)) {
-            stats.satWheel.totalTx++;
-            stats.satWheel.totalAmount += tx.value;
-            stats.satWheel.oneSatTx++;
-            this.updateWalletMapUltraLean(stats.satWheel.wallets, tx.from, tx.value);
-            
-            if (isFromAgent) {
-                stats.satWheel.oneSatAgentTx++;
-                stats.satWheel.agentAmount += tx.value;
-            } else {
-                stats.satWheel.oneSatUserTx++;
-                stats.satWheel.userAmount += tx.value;
-            }
-            
-            stats.gamingIncoming.totalTx++;
-            stats.gamingIncoming.totalAmount += tx.value;
-            this.updateWalletMapUltraLean(stats.gamingIncoming.wallets, tx.from, tx.value);
-            
-        } else if (this.isFloatEqual(tx.value, this.THRESHOLDS.TEN_SATS)) {
-            stats.satWheel.totalTx++;
-            stats.satWheel.totalAmount += tx.value;
-            stats.satWheel.tenSatsTx++;
-            this.updateWalletMapUltraLean(stats.satWheel.wallets, tx.from, tx.value);
-            stats.satWheel.userAmount += tx.value;
-            
-            stats.gamingIncoming.totalTx++;
-            stats.gamingIncoming.totalAmount += tx.value;
-            this.updateWalletMapUltraLean(stats.gamingIncoming.wallets, tx.from, tx.value);
-            
-        } else if (this.isFloatEqual(tx.value, this.THRESHOLDS.HUNDRED_SATS)) {
-            stats.guessTheBlock.totalTx++;
-            stats.guessTheBlock.totalAmount += tx.value;
-            this.updateWalletMapUltraLean(stats.guessTheBlock.wallets, tx.from, tx.value);
-            
-            stats.gamingIncoming.totalTx++;
-            stats.gamingIncoming.totalAmount += tx.value;
-            this.updateWalletMapUltraLean(stats.gamingIncoming.wallets, tx.from, tx.value);
-            
-        } else if (tx.value > this.THRESHOLDS.TOP_UP_MIN) {
-            stats.topUps.totalOps++;
-            stats.topUps.totalAmount += tx.value;
-            stats.topUps.largestTopUp = Math.max(stats.topUps.largestTopUp, tx.value);
-            if (stats.topUps.smallestTopUp === Infinity) {
-                stats.topUps.smallestTopUp = tx.value;
-            } else {
-                stats.topUps.smallestTopUp = Math.min(stats.topUps.smallestTopUp, tx.value);
-            }
-            
-            if (!this.disableTopUpStorage && stats.topUps.transactions.length < 100) {
-                stats.topUps.transactions.push({
-                    hash: tx.transactionHash,
-                    from: tx.from,
-                    value: tx.value,
-                    valueSats: Math.round(tx.value * 100000000),
-                    timestamp: tx.timestamp,
-                    blockNumber: tx.blockNumber,
-                    date: new Date(tx.timestamp * 1000).toISOString().replace('T', ' ').replace('Z', ' UTC')
-                });
-            }
-            
-        } else {
-            stats.uncategorizedIncoming.totalTx++;
-            stats.uncategorizedIncoming.totalAmount += tx.value;
-            this.updateWalletMapUltraLean(stats.uncategorizedIncoming.wallets, tx.from, tx.value);
-            
-            const satsValue = Math.round(tx.value * 100000000);
-            const rangeKey = this.getValueRange(satsValue);
-            if (!stats.uncategorizedIncoming.valueRanges.has(rangeKey)) {
-                stats.uncategorizedIncoming.valueRanges.set(rangeKey, { count: 0, totalValue: 0 });
-            }
-            const range = stats.uncategorizedIncoming.valueRanges.get(rangeKey);
-            range.count++;
-            range.totalValue += tx.value;
-        }
-    }
-
-    processIncomingTransactionUltraLean(tx, stats) {
-        stats.allIncoming.totalTx++;
-        stats.allIncoming.totalAmount += tx.value;
-        this.updateWalletMapUltraLean(stats.allIncoming.wallets, tx.from, tx.value);
-
-        const isFromAgent = this.agentAddress && tx.from === this.agentAddress;
-
-        if (this.isFloatEqual(tx.value, this.THRESHOLDS.ONE_SAT)) {
-            stats.satWheel.totalTx++;
-            stats.satWheel.totalAmount += tx.value;
-            stats.satWheel.oneSatTx++;
-            this.updateWalletMapUltraLean(stats.satWheel.wallets, tx.from, tx.value);
-            
-            if (isFromAgent) {
-                stats.satWheel.oneSatAgentTx++;
-                stats.satWheel.agentAmount += tx.value;
-            } else {
-                stats.satWheel.oneSatUserTx++;
-                stats.satWheel.userAmount += tx.value;
-            }
-            
-            stats.gamingIncoming.totalTx++;
-            stats.gamingIncoming.totalAmount += tx.value;
-            this.updateWalletMapUltraLean(stats.gamingIncoming.wallets, tx.from, tx.value);
-            
-        } else if (this.isFloatEqual(tx.value, this.THRESHOLDS.TEN_SATS)) {
-            stats.satWheel.totalTx++;
-            stats.satWheel.totalAmount += tx.value;
-            stats.satWheel.tenSatsTx++;
-            this.updateWalletMapUltraLean(stats.satWheel.wallets, tx.from, tx.value);
-            stats.satWheel.userAmount += tx.value;
-            
-            stats.gamingIncoming.totalTx++;
-            stats.gamingIncoming.totalAmount += tx.value;
-            this.updateWalletMapUltraLean(stats.gamingIncoming.wallets, tx.from, tx.value);
-            
-        } else if (this.isFloatEqual(tx.value, this.THRESHOLDS.HUNDRED_SATS)) {
-            stats.guessTheBlock.totalTx++;
-            stats.guessTheBlock.totalAmount += tx.value;
-            this.updateWalletMapUltraLean(stats.guessTheBlock.wallets, tx.from, tx.value);
-            
-            stats.gamingIncoming.totalTx++;
-            stats.gamingIncoming.totalAmount += tx.value;
-            this.updateWalletMapUltraLean(stats.gamingIncoming.wallets, tx.from, tx.value);
-            
-        } else if (tx.value > this.THRESHOLDS.TOP_UP_MIN) {
-            stats.topUps.totalOps++;
-            stats.topUps.totalAmount += tx.value;
-            stats.topUps.largestTopUp = Math.max(stats.topUps.largestTopUp, tx.value);
-            if (stats.topUps.smallestTopUp === Infinity) {
-                stats.topUps.smallestTopUp = tx.value;
-            } else {
-                stats.topUps.smallestTopUp = Math.min(stats.topUps.smallestTopUp, tx.value);
-            }
-            
-            if (!this.disableTopUpStorage && stats.topUps.transactions.length < 100) {
-                stats.topUps.transactions.push({
-                    hash: tx.transactionHash,
-                    from: tx.from,
-                    value: tx.value,
-                    timestamp: tx.timestamp,
-                    blockNumber: tx.blockNumber
-                });
-            }
-            
-        } else {
-            stats.uncategorizedIncoming.totalTx++;
-            stats.uncategorizedIncoming.totalAmount += tx.value;
-            this.updateWalletMapUltraLean(stats.uncategorizedIncoming.wallets, tx.from, tx.value);
-        }
-    }
-
-    getValueRange(sats) {
-        if (sats === 0) return '0 sats';
-        if (sats < 1) return '< 1 sat';
-        if (sats < 10) return '1-9 sats';
-        if (sats < 100) return '10-99 sats';
-        if (sats < 1000) return '100-999 sats';
-        if (sats < 10000) return '1k-9.9k sats';
-        if (sats < 100000) return '10k-99.9k sats';
-        return '100k+ sats';
-    }
-
-    processOutgoingTransaction(tx, stats) {
-        stats.payouts.totalTx++;
-        stats.payouts.totalAmount += tx.value;
-        this.updateWalletMapUltraLean(stats.payouts.wallets, tx.to, tx.value);
-
-        stats.payouts.largestPayout = Math.max(stats.payouts.largestPayout, tx.value);
-        if (stats.payouts.smallestPayout === Infinity) {
-            stats.payouts.smallestPayout = tx.value;
-        } else {
-            stats.payouts.smallestPayout = Math.min(stats.payouts.smallestPayout, tx.value);
-        }
-
-        stats.allOutgoing.totalTx++;
-        stats.allOutgoing.totalAmount += tx.value;
-    }
-
-    processOutgoingTransactionUltraLean(tx, stats) {
-        stats.payouts.totalTx++;
-        stats.payouts.totalAmount += tx.value;
-        this.updateWalletMapUltraLean(stats.payouts.wallets, tx.to, tx.value);
-
-        stats.payouts.largestPayout = Math.max(stats.payouts.largestPayout, tx.value);
-        if (stats.payouts.smallestPayout === Infinity) {
-            stats.payouts.smallestPayout = tx.value;
-        } else {
-            stats.payouts.smallestPayout = Math.min(stats.payouts.smallestPayout, tx.value);
-        }
-
-        stats.allOutgoing.totalTx++;
-        stats.allOutgoing.totalAmount += tx.value;
-    }
-
-calculateWalletAverages(walletMap, totalTx, totalValue) {
-    if (this.disableWalletTracking) {
-        // When wallet tracking is disabled, return N/A for all wallet-related metrics
-        return {
-            uniqueWallets: 'N/A (wallet tracking disabled)',
-            avgTxPerWallet: 'N/A (wallet tracking disabled)',
-            avgValuePerWallet: 'N/A (wallet tracking disabled)',
-            avgSatsPerWallet: 'N/A (wallet tracking disabled)'
-        };
-    }
-    
-    // Normal mode logic (no else needed since we return above)
-    const uniqueWallets = walletMap.size;
-    const avgTxPerWallet = uniqueWallets > 0 ? totalTx / uniqueWallets : 0;
-    const avgValuePerWallet = uniqueWallets > 0 ? totalValue / uniqueWallets : 0;
-    const avgSatsPerWallet = avgValuePerWallet * 100000000;
-
-    return {
-        uniqueWallets,
-        avgTxPerWallet,
-        avgValuePerWallet,
-        avgSatsPerWallet
-    };
-}
-
-    // Aggressive cleanup during processing
-    aggressiveCleanupDuringProcessing() {
-        // Clear all wallet maps to free memory
-        Object.values(this.analytics).forEach(stats => {
-            if (stats.allIncoming.wallets.size > 0) {
-                stats.allIncoming.wallets.clear();
-                stats.satWheel.wallets.clear();
-                stats.guessTheBlock.wallets.clear();
-                stats.payouts.wallets.clear();
-                stats.uncategorizedIncoming.wallets.clear();
-                stats.gamingIncoming.wallets.clear();
-            }
-        });
-        
-        // Clear older daily analytics but keep some for breakdown
-        if (this.dailyAnalytics.size > 20) {
-            const oldestKeys = Array.from(this.dailyAnalytics.keys())
-                .sort()
-                .slice(0, this.dailyAnalytics.size - 15); // Keep last 15 days
-            oldestKeys.forEach(key => this.dailyAnalytics.delete(key));
-        }
-        
-        // Clear top-up transaction details
-        Object.values(this.analytics).forEach(stats => {
-            stats.topUps.transactions = [];
-        });
-        
-        console.log(`[${new Date().toISOString()}] INFO: # Aggressive cleanup completed`);
-    }
-
-    isFloatEqual(a, b, tolerance = 1e-10) {
-        return Math.abs(a - b) < tolerance;
-    }
-
-    // Simplified duplicate check (only if not skipped)
+    // Check for duplicate transaction IDs before processing
     async checkForDuplicates() {
         return new Promise((resolve, reject) => {
             try {
@@ -1036,14 +331,6 @@ calculateWalletAverages(walletMap, totalTx, totalValue) {
                     try {
                         lineCount++;
                         
-                        if (lineCount % 50000 === 0) {
-                            if (this.memoryManager.isPanicState()) {
-                                console.error(`[${new Date().toISOString()}] PANIC: # Memory critical during duplicate check - aborting`);
-                                rl.close();
-                                return;
-                            }
-                        }
-                        
                         if (isFirstLine) {
                             isFirstLine = false;
                             return;
@@ -1054,7 +341,7 @@ calculateWalletAverages(walletMap, totalTx, totalValue) {
 
                         const columns = trimmedLine.split(',');
                         if (columns.length >= 2) {
-                            const txid = columns[1];
+                            const txid = columns[1]; // Transaction hash is in column 1
                             totalTxids++;
                             
                             if (txidSet.has(txid)) {
@@ -1085,19 +372,18 @@ calculateWalletAverages(walletMap, totalTx, totalValue) {
                         console.log(`[${new Date().toISOString()}] WARN: # DUPLICATE TRANSACTIONS DETECTED:`);
                         let reportCount = 0;
                         for (const [txid, lines] of duplicates.entries()) {
-                            if (reportCount < 5) {
+                            if (reportCount < 10) { // Show first 10 duplicates
                                 console.log(`[${new Date().toISOString()}] WARN: # TXID: ${txid} appears on lines: ${lines.join(', ')}`);
                                 reportCount++;
                             }
                         }
-                        if (duplicates.size > 5) {
-                            console.log(`[${new Date().toISOString()}] WARN: # ... and ${duplicates.size - 5} more duplicate transaction IDs`);
+                        if (duplicates.size > 10) {
+                            console.log(`[${new Date().toISOString()}] WARN: # ... and ${duplicates.size - 10} more duplicate transaction IDs`);
                         }
                     } else {
                         console.log(`[${new Date().toISOString()}] INFO: # ✓ No duplicate transaction IDs found`);
                     }
                     
-                    txidSet.clear();
                     resolve();
                 });
 
@@ -1111,6 +397,449 @@ calculateWalletAverages(walletMap, totalTx, totalValue) {
                 reject(error);
             }
         });
+    }
+
+    getDayKey(timestamp) {
+        const date = new Date(timestamp * 1000);
+        return date.toISOString().split('T')[0]; // YYYY-MM-DD format
+    }
+
+    getWeekdayName(dateString) {
+        const date = new Date(dateString + 'T00:00:00.000Z');
+        const weekdays = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
+        return weekdays[date.getUTCDay()];
+    }
+
+    // Updated function to calculate period averages with proper period mapping
+    calculatePeriodAverages(periodStats, dayCount) {
+        if (dayCount === 0) return null;
+        
+        // Get yesterday as the most recent complete day
+        const now = new Date();
+        const yesterday = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - 1));
+        
+        const cutoffDate = new Date(yesterday);
+        cutoffDate.setUTCDate(yesterday.getUTCDate() - (dayCount - 1)); // Include yesterday in the count
+        const cutoffTimestamp = Math.floor(cutoffDate.getTime() / 1000);
+        
+        this.debugLog(`# Calculating ${dayCount}-day averages from ${cutoffDate.toISOString()} to ${yesterday.toISOString()} (excluding today)`);
+        
+        // Filter daily analytics to only include complete days within the period
+        const relevantDays = Array.from(this.dailyAnalytics.entries())
+            .filter(([dateStr, stats]) => {
+                const dayDate = new Date(dateStr + 'T00:00:00.000Z');
+                const dayTimestamp = Math.floor(dayDate.getTime() / 1000);
+                const yesterdayTimestamp = Math.floor(yesterday.getTime() / 1000);
+                
+                // Must be within period and not be today
+                return dayTimestamp >= cutoffTimestamp && dayTimestamp <= yesterdayTimestamp;
+            });
+        
+        if (relevantDays.length === 0) {
+            this.debugLog(`# No relevant complete days found for ${dayCount}-day period`);
+            return null;
+        }
+        
+        const actualDays = relevantDays.length;
+        this.debugLog(`# Found ${actualDays} complete days for ${dayCount}-day period (excluding today)`);
+        
+        // Calculate totals from daily data
+        let totalTransactions = 0;
+        let totalSatWheelTx = 0;
+        let totalUserTx = 0;
+        let totalAgentTx = 0;
+        let totalGuessTheBlock = 0;
+        let totalTxCountData = 0;
+        
+        const allUniqueIncomingWallets = new Set(); // Only incoming wallets
+        
+        relevantDays.forEach(([dateStr, dayStats]) => {
+            totalTransactions += dayStats.totalTransactions;
+            totalSatWheelTx += dayStats.satWheel.totalTx;
+            totalUserTx += (dayStats.satWheel.oneSatUserTx + dayStats.satWheel.tenSatsTx);
+            totalAgentTx += dayStats.satWheel.oneSatAgentTx;
+            totalGuessTheBlock += dayStats.guessTheBlock.totalTx;
+            
+            // Add TX_COUNT data for this day
+            const dayTxCount = this.getTxCountForDay(dateStr);
+            totalTxCountData += dayTxCount;
+            
+            if (this.DEBUG) {
+                this.debugLog(`# Complete day ${dateStr}: Our=${dayStats.totalTransactions}, Network=${dayTxCount}`);
+            }
+            
+            // Only collect wallets that send TO the game (incoming only)
+            dayStats.allIncoming.wallets.forEach((_, wallet) => allUniqueIncomingWallets.add(wallet));
+        });
+        
+        // Calculate averages
+        const avgTransactions = Math.round(totalTransactions / actualDays);
+        const avgUniqueWallets = Math.round(allUniqueIncomingWallets.size / actualDays);
+        const avgSatWheelTx = Math.round(totalSatWheelTx / actualDays);
+        const avgUserTx = Math.round(totalUserTx / actualDays);
+        const avgAgentTx = Math.round(totalAgentTx / actualDays);
+        const avgGuessTheBlock = Math.round(totalGuessTheBlock / actualDays);
+        const avgTxCountData = Math.round(totalTxCountData / actualDays);
+        
+        // Calculate share percentage
+        const sharePercentage = this.calculateSharePercentage(totalTransactions, totalTxCountData);
+        
+        this.debugLog(`# ${dayCount}-day totals (complete days only): Our=${totalTransactions}, Network=${totalTxCountData}, Share=${sharePercentage}%`);
+        
+        return {
+            avgTransactions,
+            avgUniqueWallets,
+            avgSatWheelTx,
+            avgUserTx,
+            avgAgentTx,
+            avgGuessTheBlock,
+            avgTxCountData,
+            sharePercentage,
+            actualDays // Include actual days counted for debugging
+        };
+    }
+
+    updateDailyStats(tx) {
+        const dayKey = this.getDayKey(tx.timestamp);
+        
+        if (!this.dailyAnalytics.has(dayKey)) {
+            this.dailyAnalytics.set(dayKey, this.createEmptyStats());
+        }
+        
+        const dailyStats = this.dailyAnalytics.get(dayKey);
+        this.processDailyTransaction(tx, dailyStats);
+        
+        // Also track for last 14 days breakdown if within range
+        if (tx.timestamp >= this.timeCutoffs.last14Days) {
+            if (!this.last14DaysBreakdown.has(dayKey)) {
+                this.last14DaysBreakdown.set(dayKey, this.createEmptyStats());
+            }
+            const breakdownStats = this.last14DaysBreakdown.get(dayKey);
+            this.processDailyTransaction(tx, breakdownStats);
+        }
+    }
+
+    processDailyTransaction(tx, stats) {
+        const isIncoming = tx.to === this.address;
+        const isOutgoing = tx.from === this.address;
+        
+        if (!isIncoming && !isOutgoing) return;
+        if (tx.value <= 0 || tx.value < 1e-18) return;
+
+        // Update general stats
+        stats.totalTransactions++;
+        stats.earliestTimestamp = Math.min(stats.earliestTimestamp, tx.timestamp);
+        stats.latestTimestamp = Math.max(stats.latestTimestamp, tx.timestamp);
+        stats.blockRange.min = Math.min(stats.blockRange.min, tx.blockNumber);
+        stats.blockRange.max = Math.max(stats.blockRange.max, tx.blockNumber);
+        
+        if (isIncoming) {
+            this.processIncomingTransaction(tx, stats);
+        } else if (isOutgoing) {
+            this.processOutgoingTransaction(tx, stats);
+        }
+    }
+
+    processTransaction(tx) {
+        // Determine if transaction is incoming or outgoing
+        const isIncoming = tx.to === this.address;
+        const isOutgoing = tx.from === this.address;
+        
+        if (!isIncoming && !isOutgoing) return;
+
+        // Filter out zero-value transactions
+        if (tx.value <= 0 || tx.value < 1e-18) return;
+
+        // NOTE: Date filtering is now handled in analyzeStreaming()
+
+        // Update daily analytics
+        this.updateDailyStats(tx);
+
+        // Process for all time periods
+        const periods = ['allTime'];
+        if (tx.timestamp >= this.timeCutoffs.last30Days) periods.push('last30Days');
+        if (tx.timestamp >= this.timeCutoffs.last14Days) periods.push('last14Days');
+        if (tx.timestamp >= this.timeCutoffs.last7Days) periods.push('last7Days');
+
+        for (const period of periods) {
+            const stats = this.analytics[period];
+            
+            // Update general stats
+            stats.totalTransactions++;
+            stats.earliestTimestamp = Math.min(stats.earliestTimestamp, tx.timestamp);
+            stats.latestTimestamp = Math.max(stats.latestTimestamp, tx.timestamp);
+            stats.blockRange.min = Math.min(stats.blockRange.min, tx.blockNumber);
+            stats.blockRange.max = Math.max(stats.blockRange.max, tx.blockNumber);
+            
+            if (isIncoming) {
+                this.processIncomingTransaction(tx, stats);
+            } else if (isOutgoing) {
+                this.processOutgoingTransaction(tx, stats);
+            }
+        }
+    }
+
+    processIncomingTransaction(tx, stats) {
+        // ALWAYS track in all incoming first
+        stats.allIncoming.totalTx++;
+        stats.allIncoming.totalAmount += tx.value;
+        this.updateWalletMap(stats.allIncoming.wallets, tx.from, tx.value);
+
+        // Check if transaction is from agent
+        const isFromAgent = this.agentAddress && tx.from === this.agentAddress;
+
+        // Categorize EVERY transaction precisely
+        if (this.isFloatEqual(tx.value, this.THRESHOLDS.ONE_SAT)) {
+            // Exactly 1 Sat
+            stats.satWheel.totalTx++;
+            stats.satWheel.totalAmount += tx.value;
+            stats.satWheel.oneSatTx++;
+            this.updateWalletMap(stats.satWheel.wallets, tx.from, tx.value);
+            
+            // Agent/User breakdown for 1 sat only
+            if (isFromAgent) {
+                stats.satWheel.oneSatAgentTx++;
+                stats.satWheel.agentAmount += tx.value;
+            } else {
+                stats.satWheel.oneSatUserTx++;
+                stats.satWheel.userAmount += tx.value;
+            }
+            
+            stats.gamingIncoming.totalTx++;
+            stats.gamingIncoming.totalAmount += tx.value;
+            this.updateWalletMap(stats.gamingIncoming.wallets, tx.from, tx.value);
+            
+        } else if (this.isFloatEqual(tx.value, this.THRESHOLDS.TEN_SATS)) {
+            // Exactly 10 Sats (no agent tracking for 10 sats)
+            stats.satWheel.totalTx++;
+            stats.satWheel.totalAmount += tx.value;
+            stats.satWheel.tenSatsTx++;
+            this.updateWalletMap(stats.satWheel.wallets, tx.from, tx.value);
+            
+            // All 10 sat transactions go to user amount (no agent breakdown)
+            stats.satWheel.userAmount += tx.value;
+            
+            stats.gamingIncoming.totalTx++;
+            stats.gamingIncoming.totalAmount += tx.value;
+            this.updateWalletMap(stats.gamingIncoming.wallets, tx.from, tx.value);
+            
+        } else if (this.isFloatEqual(tx.value, this.THRESHOLDS.HUNDRED_SATS)) {
+            // Exactly 100 Sats (Guess the Block)
+            stats.guessTheBlock.totalTx++;
+            stats.guessTheBlock.totalAmount += tx.value;
+            this.updateWalletMap(stats.guessTheBlock.wallets, tx.from, tx.value);
+            
+            stats.gamingIncoming.totalTx++;
+            stats.gamingIncoming.totalAmount += tx.value;
+            this.updateWalletMap(stats.gamingIncoming.wallets, tx.from, tx.value);
+            
+        } else if (tx.value > this.THRESHOLDS.TOP_UP_MIN) {
+            // Top Ups (> 100 sats)
+            stats.topUps.totalOps++;
+            stats.topUps.totalAmount += tx.value;
+            stats.topUps.largestTopUp = Math.max(stats.topUps.largestTopUp, tx.value);
+            if (stats.topUps.smallestTopUp === Infinity) {
+                stats.topUps.smallestTopUp = tx.value;
+            } else {
+                stats.topUps.smallestTopUp = Math.min(stats.topUps.smallestTopUp, tx.value);
+            }
+            
+            stats.topUps.transactions.push({
+                hash: tx.transactionHash,
+                from: tx.from,
+                value: tx.value,
+                valueSats: Math.round(tx.value * 100000000),
+                timestamp: tx.timestamp,
+                blockNumber: tx.blockNumber,
+                date: new Date(tx.timestamp * 1000).toISOString().replace('T', ' ').replace('Z', ' UTC')
+            });
+            
+        } else {
+            // UNCATEGORIZED transactions (between 0 and 100 sats, but not exact matches)
+            stats.uncategorizedIncoming.totalTx++;
+            stats.uncategorizedIncoming.totalAmount += tx.value;
+            this.updateWalletMap(stats.uncategorizedIncoming.wallets, tx.from, tx.value);
+            
+            // Track value ranges for analysis only
+            const satsValue = Math.round(tx.value * 100000000);
+            const rangeKey = this.getValueRange(satsValue);
+            if (!stats.uncategorizedIncoming.valueRanges.has(rangeKey)) {
+                stats.uncategorizedIncoming.valueRanges.set(rangeKey, { count: 0, totalValue: 0 });
+            }
+            const range = stats.uncategorizedIncoming.valueRanges.get(rangeKey);
+            range.count++;
+            range.totalValue += tx.value;
+        }
+    }
+
+    getValueRange(sats) {
+        if (sats === 0) return '0 sats';
+        if (sats < 1) return '< 1 sat';
+        if (sats < 10) return '1-9 sats';
+        if (sats < 100) return '10-99 sats';
+        if (sats < 1000) return '100-999 sats';
+        if (sats < 10000) return '1k-9.9k sats';
+        if (sats < 100000) return '10k-99.9k sats';
+        return '100k+ sats';
+    }
+
+    processOutgoingTransaction(tx, stats) {
+        stats.payouts.totalTx++;
+        stats.payouts.totalAmount += tx.value;
+        this.updateWalletMap(stats.payouts.wallets, tx.to, tx.value);
+
+        stats.payouts.largestPayout = Math.max(stats.payouts.largestPayout, tx.value);
+        if (stats.payouts.smallestPayout === Infinity) {
+            stats.payouts.smallestPayout = tx.value;
+        } else {
+            stats.payouts.smallestPayout = Math.min(stats.payouts.smallestPayout, tx.value);
+        }
+
+        stats.allOutgoing.totalTx++;
+        stats.allOutgoing.totalAmount += tx.value;
+    }
+
+    updateWalletMap(walletMap, address, value) {
+        if (!walletMap.has(address)) {
+            walletMap.set(address, { count: 0, totalValue: 0, firstSeen: Date.now(), lastSeen: Date.now() });
+        }
+        const wallet = walletMap.get(address);
+        wallet.count++;
+        wallet.totalValue += value;
+        wallet.lastSeen = Date.now();
+    }
+
+    isFloatEqual(a, b, tolerance = 1e-10) {
+        return Math.abs(a - b) < tolerance;
+    }
+
+    // Fixed analyzeStreaming method with proper exclusion counting
+    async analyzeStreaming() {
+        // First check for duplicates
+        await this.checkForDuplicates();
+        
+        return new Promise((resolve, reject) => {
+            try {
+                console.log(`[${new Date().toISOString()}] INFO: # Starting comprehensive streaming analysis (excluding incomplete days)...`);
+                
+                const fileStream = fs.createReadStream(this.csvFilename);
+                const rl = readline.createInterface({
+                    input: fileStream,
+                    crlfDelay: Infinity
+                });
+
+                let isFirstLine = true;
+                let lineCount = 0;
+                let errorCount = 0;
+                let excludedCount = 0;
+                let totalRelevantTransactions = 0; // Track transactions relevant to our address
+
+                rl.on('line', (line) => {
+                    try {
+                        lineCount++;
+                        
+                        if (isFirstLine) {
+                            isFirstLine = false;
+                            console.log(`[${new Date().toISOString()}] INFO: # CSV Header: ${line}`);
+                            return;
+                        }
+
+                        const trimmedLine = line.trim();
+                        if (!trimmedLine) return;
+
+                        const columns = trimmedLine.split(',');
+                        if (columns.length >= 9) {
+                            const tx = {
+                                blockNumber: parseInt(columns[0]),
+                                transactionHash: columns[1],
+                                from: columns[2].toLowerCase(),
+                                to: columns[3].toLowerCase(),
+                                value: parseFloat(columns[4]),
+                                gasUsed: parseInt(columns[5]) || 0,
+                                gasPrice: parseInt(columns[6]) || 0,
+                                timestamp: parseInt(columns[7]),
+                                status: columns[8]
+                            };
+                            
+                            if (tx.status === 'success' && !isNaN(tx.value) && !isNaN(tx.timestamp) && !isNaN(tx.blockNumber)) {
+                                // Check if transaction is relevant to our address
+                                const isRelevant = (tx.to === this.address || tx.from === this.address);
+                                
+                                if (isRelevant) {
+                                    totalRelevantTransactions++;
+                                    
+                                    // Check if transaction is from today (incomplete day)
+                                    const isFromToday = tx.timestamp > this.timeCutoffs.yesterdayEnd;
+                                    
+                                    if (isFromToday) {
+                                        excludedCount++;
+                                        this.debugLog(`# Excluding transaction from incomplete day: ${new Date(tx.timestamp * 1000).toISOString()}`);
+                                    } else {
+                                        // Process the transaction (it's from a complete day)
+                                        this.processTransaction(tx);
+                                        this.processedCount++;
+                                    }
+                                }
+                            }
+                        }
+
+                        if (lineCount % 100000 === 0) {
+                            console.log(`[${new Date().toISOString()}] INFO: # Processed ${lineCount.toLocaleString()} lines, ${this.processedCount.toLocaleString()} valid transactions, ${excludedCount.toLocaleString()} excluded (incomplete day)`);
+                            
+                            if (global.gc) {
+                                global.gc();
+                            }
+                        }
+
+                    } catch (error) {
+                        errorCount++;
+                        if (errorCount <= 10) {
+                            console.warn(`[${new Date().toISOString()}] WARN: # Error parsing line ${lineCount}: ${error.message}`);
+                        }
+                    }
+                });
+
+                rl.on('close', () => {
+                    console.log(`[${new Date().toISOString()}] INFO: # Successfully processed ${this.processedCount.toLocaleString()} valid transactions from ${lineCount.toLocaleString()} lines`);
+                    console.log(`[${new Date().toISOString()}] INFO: # Total relevant transactions: ${totalRelevantTransactions.toLocaleString()}`);
+                    if (excludedCount > 0) {
+                        console.log(`[${new Date().toISOString()}] INFO: # Excluded ${excludedCount.toLocaleString()} transactions from incomplete day (today)`);
+                    } else {
+                        console.log(`[${new Date().toISOString()}] INFO: # No transactions from incomplete day found`);
+                    }
+                    if (errorCount > 0) {
+                        console.log(`[${new Date().toISOString()}] WARN: # Encountered ${errorCount} parsing errors`);
+                    }
+                    if (this.duplicateCount > 0) {
+                        console.log(`[${new Date().toISOString()}] WARN: # Note: ${this.duplicateCount} duplicate transactions were found but all lines were processed`);
+                    }
+                    resolve();
+                });
+
+                rl.on('error', (error) => {
+                    console.error(`[${new Date().toISOString()}] ERROR: # Error reading file:`, error);
+                    reject(error);
+                });
+
+            } catch (error) {
+                console.error(`[${new Date().toISOString()}] ERROR: # Error setting up file stream:`, error);
+                reject(error);
+            }
+        });
+    }
+
+    calculateWalletAverages(walletMap, totalTx, totalValue) {
+        const uniqueWallets = walletMap.size;
+        const avgTxPerWallet = uniqueWallets > 0 ? totalTx / uniqueWallets : 0;
+        const avgValuePerWallet = uniqueWallets > 0 ? totalValue / uniqueWallets : 0;
+        const avgSatsPerWallet = avgValuePerWallet * 100000000;
+
+        return {
+            uniqueWallets,
+            avgTxPerWallet,
+            avgValuePerWallet,
+            avgSatsPerWallet
+        };
     }
 
     formatBTC(value) {
@@ -1142,39 +871,30 @@ calculateWalletAverages(walletMap, totalTx, totalValue) {
         console.log(`   ${'#'.padEnd(3)} ${'Date & Time (UTC)'.padEnd(20)} ${'From Address'.padEnd(45)} ${'Amount (BTC)'.padEnd(20)} ${'Amount (Sats)'.padEnd(15)} ${'Block'.padEnd(10)}`);
         console.log(`   ` + '-'.repeat(120));
 
-        const displayLimit = this.ultraLowMemory ? Math.min(10, sortedTopUps.length) : sortedTopUps.length;
-        
-        sortedTopUps.slice(0, displayLimit).forEach((topUp, index) => {
-            const dateStr = topUp.date ? topUp.date.substring(0, 19) : new Date(topUp.timestamp * 1000).toISOString().substring(0, 19);
+        sortedTopUps.forEach((topUp, index) => {
+            const dateStr = topUp.date.substring(0, 19);
             const fromAddr = topUp.from.substring(0, 42);
             const btcAmount = this.formatBTC(topUp.value);
-            const satsAmount = topUp.valueSats ? topUp.valueSats.toLocaleString() : this.formatSats(topUp.value).toLocaleString();
+            const satsAmount = topUp.valueSats.toLocaleString();
             
             console.log(`   ${(index + 1).toString().padEnd(3)} ${dateStr.padEnd(20)} ${fromAddr.padEnd(45)} ${btcAmount.padEnd(20)} ${satsAmount.padEnd(15)} ${topUp.blockNumber.toString().padEnd(10)}`);
         });
         
-        if (this.ultraLowMemory && sortedTopUps.length > displayLimit) {
-            console.log(`   ... and ${sortedTopUps.length - displayLimit} more top-ups (limited display in ultra-low memory mode)`);
-        }
-        
         console.log(`   ` + '-'.repeat(120));
     }
 
+    // Updated function - no sample transactions display
     logUncategorizedDetails(uncategorized) {
         if (uncategorized.totalTx === 0) {
-            return;
+            return; // Don't show anything if no uncategorized transactions
         }
 
         console.log(`\n# UNCATEGORIZED INCOMING TRANSACTIONS:`);
         console.log(`   Total Transactions: ${uncategorized.totalTx.toLocaleString()}`);
         console.log(`   Total Value: ${this.formatBTC(uncategorized.totalAmount)} BTC (${this.formatSats(uncategorized.totalAmount).toLocaleString()} sats)`);
-        
-        if (this.disableWalletTracking) {
-            console.log(`   Unique Wallets: N/A (tracking disabled)`);
-        } else {
-            console.log(`   Unique Wallets: ${uncategorized.wallets.size.toLocaleString()}`);
-        }
+        console.log(`   Unique Wallets: ${uncategorized.wallets.size.toLocaleString()}`);
 
+        // Value distribution only
         if (uncategorized.valueRanges.size > 0) {
             console.log(`\n   ## VALUE DISTRIBUTION:`);
             const sortedRanges = Array.from(uncategorized.valueRanges.entries())
@@ -1186,11 +906,11 @@ calculateWalletAverages(walletMap, totalTx, totalValue) {
         }
     }
 
-    // Complete logLast14DaysBreakdown method
+    // Updated function to log daily breakdown for last 14 days (excluding today)
     logLast14DaysBreakdown() {
         if (this.last14DaysBreakdown.size === 0) {
-            console.log(`   ` + '='.repeat(100));
-            console.log(`\n## DAILY BREAKDOWN - LAST 14 DAYS:`);
+			console.log(`   ` + '='.repeat(100));
+            console.log(`\n##№ DAILY BREAKDOWN - LAST 14 DAYS:`);
             console.log(`   No data available for the last 14 complete days.`);
             return;
         }
@@ -1213,7 +933,7 @@ calculateWalletAverages(walletMap, totalTx, totalValue) {
 
         sortedDays.forEach(([date, stats]) => {
             // Only count incoming wallets (wallets that send TO the game)
-            const totalUniqueIncomingWallets = this.disableWalletTracking ? 'N/A' : stats.allIncoming.wallets.size;
+            const totalUniqueIncomingWallets = stats.allIncoming.wallets.size;
 
             const weekday = this.getWeekdayName(date);
             
@@ -1221,12 +941,12 @@ calculateWalletAverages(walletMap, totalTx, totalValue) {
             const totalTxForDay = this.getTxCountForDay(date);
             const sharePercentage = this.calculateSharePercentage(stats.totalTransactions, totalTxForDay);
 
-            console.log(`\n   ${weekday} ${date}:`);
+            console.log(`\n   ${weekday} ${date}:`); // REMOVED: (Complete Day)
             console.log(`     Total Transactions: ${stats.totalTransactions.toLocaleString()}`);
             if (totalTxForDay > 0) {
                 console.log(`          Share: ${sharePercentage}%`);
             }
-            console.log(`     Total Unique Wallets: ${typeof totalUniqueIncomingWallets === 'number' ? totalUniqueIncomingWallets.toLocaleString() : totalUniqueIncomingWallets}`);
+            console.log(`     Total Unique Wallets: ${totalUniqueIncomingWallets.toLocaleString()}`);
             console.log(`     Sat Wheel Total: ${stats.satWheel.totalTx.toLocaleString()}`);
             
             // Show Users/Agent breakdown if agent is configured and there are 1 sat transactions
@@ -1264,17 +984,14 @@ calculateWalletAverages(walletMap, totalTx, totalValue) {
             
             // Transactions
             console.log(`   ${'Transactions:'.padEnd(20)} ${averages7Days.avgTransactions.toLocaleString().padEnd(10)} ${averages14Days.avgTransactions.toLocaleString().padEnd(10)} ${averages21Days.avgTransactions.toLocaleString().padEnd(10)} ${averages28Days.avgTransactions.toLocaleString().padEnd(10)}`);
+            
             // Share percentages
             if (this.txCountData.size > 0) {
                 console.log(`   ${'      Share:'.padEnd(20)} ${(averages7Days.sharePercentage + '%').padEnd(10)} ${(averages14Days.sharePercentage + '%').padEnd(10)} ${(averages21Days.sharePercentage + '%').padEnd(10)} ${(averages28Days.sharePercentage + '%').padEnd(10)}`);
             }
             
             // Unique Wallets
-            if (this.disableWalletTracking) {
-                console.log(`   ${'Unique Wallets:'.padEnd(20)} ${'N/A'.padEnd(10)} ${'N/A'.padEnd(10)} ${'N/A'.padEnd(10)} ${'N/A'.padEnd(10)}`);
-            } else {
-                console.log(`   ${'Unique Wallets:'.padEnd(20)} ${averages7Days.avgUniqueWallets.toLocaleString().padEnd(10)} ${averages14Days.avgUniqueWallets.toLocaleString().padEnd(10)} ${averages21Days.avgUniqueWallets.toLocaleString().padEnd(10)} ${averages28Days.avgUniqueWallets.toLocaleString().padEnd(10)}`);
-            }
+            console.log(`   ${'Unique Wallets:'.padEnd(20)} ${averages7Days.avgUniqueWallets.toLocaleString().padEnd(10)} ${averages14Days.avgUniqueWallets.toLocaleString().padEnd(10)} ${averages21Days.avgUniqueWallets.toLocaleString().padEnd(10)} ${averages28Days.avgUniqueWallets.toLocaleString().padEnd(10)}`);
             
             // Wheel Total
             console.log(`   ${'Wheel Total:'.padEnd(20)} ${averages7Days.avgSatWheelTx.toLocaleString().padEnd(10)} ${averages14Days.avgSatWheelTx.toLocaleString().padEnd(10)} ${averages21Days.avgSatWheelTx.toLocaleString().padEnd(10)} ${averages28Days.avgSatWheelTx.toLocaleString().padEnd(10)}`);
@@ -1295,10 +1012,12 @@ calculateWalletAverages(walletMap, totalTx, totalValue) {
         console.log(`   ` + '='.repeat(100));
     }
 
+     // Updated logPeriodAnalysis - move daily breakdown trigger
     logPeriodAnalysis(periodName, stats) {
         console.log(`\n### ${periodName}`);
         console.log('='.repeat(60));
 
+        // Calculate TX_COUNT data for the period and share percentage
         let totalTxCountForPeriod = 0;
         let sharePercentage = '0.00';
         
@@ -1320,25 +1039,12 @@ calculateWalletAverages(walletMap, totalTx, totalValue) {
         console.log(`\n   # TOTAL INCOMING:`);
         console.log(`   • Transactions: ${stats.allIncoming.totalTx.toLocaleString()}`);
         console.log(`   • Value: ${this.formatBTC(stats.allIncoming.totalAmount)} BTC (${this.formatSats(stats.allIncoming.totalAmount).toLocaleString()} sats)`);
-        
-        // Handle wallet tracking disabled mode
-        if (this.disableWalletTracking) {
-            const estimatedUniqueWallets = (this.totalUniqueAddresses || 0) + (this.uniqueAddressesSeen ? this.uniqueAddressesSeen.size : 0);
-            console.log(`   • Unique Wallets: ${estimatedUniqueWallets > 0 ? estimatedUniqueWallets + ' (estimated)' : 'N/A (tracking disabled)'}`);
-        } else {
-            console.log(`   • Unique Wallets: ${stats.allIncoming.wallets.size.toLocaleString()}`);
-        }
+        console.log(`   • Unique Wallets: ${stats.allIncoming.wallets.size.toLocaleString()}`);
         
         console.log(`\n   # TOTAL OUTGOING:`);
         console.log(`   • Transactions: ${stats.allOutgoing.totalTx.toLocaleString()}`);
         console.log(`   • Value: ${this.formatBTC(stats.allOutgoing.totalAmount)} BTC (${this.formatSats(stats.allOutgoing.totalAmount).toLocaleString()} sats)`);
-        
-        // Handle wallet tracking disabled mode
-        if (this.disableWalletTracking) {
-            console.log(`   • Unique Wallets: N/A (tracking disabled)`);
-        } else {
-            console.log(`   • Unique Wallets: ${stats.payouts.wallets.size.toLocaleString()}`);
-        }
+        console.log(`   • Unique Wallets: ${stats.payouts.wallets.size.toLocaleString()}`);
         
         // Verification check
         const categorizedTotal = stats.satWheel.totalAmount + stats.guessTheBlock.totalAmount + 
@@ -1377,32 +1083,17 @@ calculateWalletAverages(walletMap, totalTx, totalValue) {
             console.log(`   Agent Value: ${this.formatBTC(stats.satWheel.agentAmount)} BTC (${this.formatSats(stats.satWheel.agentAmount).toLocaleString()} sats)`);
         }
         
-        // Handle wallet tracking disabled mode for SAT WHEEL
-        if (this.disableWalletTracking) {
-            console.log(`   Unique Wallets: ${satWheelAvg.uniqueWallets} (estimated - wallet tracking disabled)`);
-            console.log(`   Avg TX per Wallet: ${typeof satWheelAvg.avgTxPerWallet === 'number' ? satWheelAvg.avgTxPerWallet.toFixed(2) : satWheelAvg.avgTxPerWallet}`);
-            console.log(`   Avg Value per Wallet: N/A (wallet tracking disabled)`);
-        } else {
-            console.log(`   Unique Wallets: ${satWheelAvg.uniqueWallets.toLocaleString()}`);
-            console.log(`   Avg TX per Wallet: ${satWheelAvg.avgTxPerWallet.toFixed(2)}`);
-            console.log(`   Avg Value per Wallet: ${this.formatBTC(satWheelAvg.avgValuePerWallet)} BTC (${Math.round(satWheelAvg.avgSatsPerWallet).toLocaleString()} sats)`);
-        }
+        console.log(`   Unique Wallets: ${satWheelAvg.uniqueWallets.toLocaleString()}`);
+        console.log(`   Avg TX per Wallet: ${satWheelAvg.avgTxPerWallet.toFixed(2)}`);
+        console.log(`   Avg Value per Wallet: ${this.formatBTC(satWheelAvg.avgValuePerWallet)} BTC (${Math.round(satWheelAvg.avgSatsPerWallet).toLocaleString()} sats)`);
 
         const gtbAvg = this.calculateWalletAverages(stats.guessTheBlock.wallets, stats.guessTheBlock.totalTx, stats.guessTheBlock.totalAmount);
         console.log(`\n## GUESS THE BLOCK (100 sats):`);
         console.log(`   Total Transactions: ${stats.guessTheBlock.totalTx.toLocaleString()}`);
         console.log(`   Total Value: ${this.formatBTC(stats.guessTheBlock.totalAmount)} BTC (${this.formatSats(stats.guessTheBlock.totalAmount).toLocaleString()} sats)`);
-        
-        // Handle wallet tracking disabled mode for GUESS THE BLOCK
-        if (this.disableWalletTracking) {
-            console.log(`   Unique Wallets: ${gtbAvg.uniqueWallets} (estimated - wallet tracking disabled)`);
-            console.log(`   Avg TX per Wallet: ${typeof gtbAvg.avgTxPerWallet === 'number' ? gtbAvg.avgTxPerWallet.toFixed(2) : gtbAvg.avgTxPerWallet}`);
-            console.log(`   Avg Value per Wallet: N/A (wallet tracking disabled)`);
-        } else {
-            console.log(`   Unique Wallets: ${gtbAvg.uniqueWallets.toLocaleString()}`);
-            console.log(`   Avg TX per Wallet: ${gtbAvg.avgTxPerWallet.toFixed(2)}`);
-            console.log(`   Avg Value per Wallet: ${this.formatBTC(gtbAvg.avgValuePerWallet)} BTC (${Math.round(gtbAvg.avgSatsPerWallet).toLocaleString()} sats)`);
-        }
+        console.log(`   Unique Wallets: ${gtbAvg.uniqueWallets.toLocaleString()}`);
+        console.log(`   Avg TX per Wallet: ${gtbAvg.avgTxPerWallet.toFixed(2)}`);
+        console.log(`   Avg Value per Wallet: ${this.formatBTC(gtbAvg.avgValuePerWallet)} BTC (${Math.round(gtbAvg.avgSatsPerWallet).toLocaleString()} sats)`);
 
         if (periodName === 'ALL TIME') {
             console.log(`\n## TOP UPS (>100 sats):`);
@@ -1420,22 +1111,13 @@ calculateWalletAverages(walletMap, totalTx, totalValue) {
         console.log(`\n## PAYOUTS:`);
         console.log(`   Total Transactions: ${stats.payouts.totalTx.toLocaleString()}`);
         console.log(`   Total Value: ${this.formatBTC(stats.payouts.totalAmount)} BTC (${this.formatSats(stats.payouts.totalAmount).toLocaleString()} sats)`);
-        
-        // Handle wallet tracking disabled mode for PAYOUTS
-        if (this.disableWalletTracking) {
-            console.log(`   Unique Wallets: ${payoutAvg.uniqueWallets} (estimated - wallet tracking disabled)`);
-            console.log(`   Avg TX per Wallet: ${typeof payoutAvg.avgTxPerWallet === 'number' ? payoutAvg.avgTxPerWallet.toFixed(2) : payoutAvg.avgTxPerWallet}`);
-            console.log(`   Avg Value per Wallet: N/A (wallet tracking disabled)`);
-        } else {
-            console.log(`   Unique Wallets: ${payoutAvg.uniqueWallets.toLocaleString()}`);
-            console.log(`   Avg TX per Wallet: ${payoutAvg.avgTxPerWallet.toFixed(2)}`);
-            console.log(`   Avg Value per Wallet: ${this.formatBTC(payoutAvg.avgValuePerWallet)} BTC (${Math.round(payoutAvg.avgSatsPerWallet).toLocaleString()} sats)`);
-        }
-        
+        console.log(`   Unique Wallets: ${payoutAvg.uniqueWallets.toLocaleString()}`);
+        console.log(`   Avg TX per Wallet: ${payoutAvg.avgTxPerWallet.toFixed(2)}`);
+        console.log(`   Avg Value per Wallet: ${this.formatBTC(payoutAvg.avgValuePerWallet)} BTC (${Math.round(payoutAvg.avgSatsPerWallet).toLocaleString()} sats)`);
         console.log(`   Largest Payout: ${this.formatBTC(stats.payouts.largestPayout)} BTC (${this.formatSats(stats.payouts.largestPayout).toLocaleString()} sats)`);
         console.log(`   Smallest Payout: ${this.formatBTC(stats.payouts.smallestPayout)} BTC (${this.formatSats(stats.payouts.smallestPayout).toLocaleString()} sats)`);
-        const avgPayoutValue = stats.payouts.totalTx > 0 ? stats.payouts.totalAmount / stats.payouts.totalTx : 0;
-        console.log(`   Avg payout value: ${this.formatBTC(avgPayoutValue)} BTC (${Math.round(avgPayoutValue * 100000000).toLocaleString()} sats)`);
+		const avgPayoutValue = stats.payouts.totalTx > 0 ? stats.payouts.totalAmount / stats.payouts.totalTx : 0;
+console.log(`   Avg payout value: ${this.formatBTC(avgPayoutValue)} BTC (${Math.round(avgPayoutValue * 100000000).toLocaleString()} sats)`);
 
         // Ratios
         const gamingIn = stats.gamingIncoming.totalAmount;
@@ -1454,8 +1136,10 @@ calculateWalletAverages(walletMap, totalTx, totalValue) {
         console.log(`   Total Payouts: ${this.formatBTC(totalOut)} BTC (${this.formatSats(totalOut).toLocaleString()} sats)`);
         console.log(`   Full Ratio (In/Out): ${fullRatio === Infinity ? 'INFINITY' : fullRatio.toFixed(4)}`);
 
-        // Top Wallets Summary (only for all time to avoid clutter, and only if not in ultra-low memory mode)
-        if (periodName === 'ALL TIME' && !this.ultraLowMemory && !this.disableWalletTracking && stats.satWheel.wallets.size > 0) {
+        // REMOVED: Daily breakdown trigger from here - it will be called after all periods
+
+        // Top Wallets Summary (only for all time to avoid clutter)
+        if (periodName === 'ALL TIME' && stats.satWheel.wallets.size > 0) {
             const topSatWheelWallets = this.getTopWallets(stats.satWheel.wallets, 5);
             console.log(`\n## TOP 5 SAT WHEEL PLAYERS:`);
             topSatWheelWallets.forEach((wallet, index) => {
@@ -1463,25 +1147,12 @@ calculateWalletAverages(walletMap, totalTx, totalValue) {
             });
         }
 
-        if (periodName === 'ALL TIME' && !this.ultraLowMemory && !this.disableWalletTracking && stats.payouts.wallets.size > 0) {
+        if (periodName === 'ALL TIME' && stats.payouts.wallets.size > 0) {
             const topPayoutWallets = this.getTopWallets(stats.payouts.wallets, 5);
             console.log(`\n## TOP 5 PAYOUT RECIPIENTS:`);
             topPayoutWallets.forEach((wallet, index) => {
                 console.log(`   ${index + 1}. ${wallet.address.substring(0, 10)}... - ${wallet.count} txs, ${this.formatBTC(wallet.totalValue)} BTC`);
             });
-        }
-
-        // Show wallet info for ultra-low memory mode or disabled wallet tracking
-        if (this.ultraLowMemory || this.disableWalletTracking) {
-            console.log(`\n## WALLET DATA:`);
-            if (this.disableWalletTracking) {
-                console.log(`   Wallet tracking disabled to conserve memory.`);
-                console.log(`   Transaction counts and amounts remain accurate.`);
-                console.log(`   Unique wallet counts are estimated.`);
-            } else {
-                console.log(`   Wallet details limited due to ultra-low memory mode.`);
-                console.log(`   Top wallet summaries not available to save memory.`);
-            }
         }
     }
 
@@ -1494,8 +1165,7 @@ calculateWalletAverages(walletMap, totalTx, totalValue) {
         return wallets;
     }
 
-    // Enhanced generateReport with daily breakdown
-    async generateReport() {
+        generateReport() {
         console.log(`\n# COMPREHENSIVE TRANSACTION ANALYSIS WITH COMPLETE CATEGORIZATION`);
         console.log(`# Analysis Date: ${new Date().toISOString()}`);
         console.log(`# Target Address: ${this.address}`);
@@ -1510,20 +1180,11 @@ calculateWalletAverages(walletMap, totalTx, totalValue) {
         if (this.duplicateCount > 0) {
             console.log(`# Duplicate Transactions Found: ${this.duplicateTransactions.size.toLocaleString()} unique TXIDs with ${this.duplicateCount.toLocaleString()} total duplicates`);
         } else {
-            console.log(`# Duplicate Check: ${this.skipDuplicateCheck ? 'SKIPPED' : '✓ No duplicates found'}`);
+            console.log(`# Duplicate Check: ✓ No duplicates found`);
         }
         
         if (this.txCountData.size > 0) {
             console.log(`# TX_COUNT Data: Available for ${this.txCountData.size.toLocaleString()} days`);
-        }
-        
-        // Include memory usage information in report
-        if (this.memoryManager) {
-            const memInfo = this.memoryManager.getMemoryInfo();
-            console.log(`# Memory Usage: ${memInfo.heapUsedMB}MB (${memInfo.usagePercent}%) of ${this.memoryManager.maxMemoryMB}MB limit`);
-            console.log(`# Ultra-low memory mode: ${this.ultraLowMemory ? 'ENABLED' : 'DISABLED'}`);
-            console.log(`# Wallet tracking: ${this.disableWalletTracking ? 'DISABLED' : 'ENABLED'}`);
-            console.log(`# Garbage Collection: ${memInfo.gcAvailable ? 'AVAILABLE' : 'NOT AVAILABLE'}`);
         }
         
         try {
@@ -1534,19 +1195,14 @@ calculateWalletAverages(walletMap, totalTx, totalValue) {
             console.warn(`[${new Date().toISOString()}] WARN: # Could not get file size`);
         }
 
-        // All periods first, then daily breakdown at the very end
+        // CORRECT ORDER: All periods first, then daily breakdown at the very end
         this.logPeriodAnalysis('ALL TIME', this.analytics.allTime);
         this.logPeriodAnalysis('LAST 30 DAYS', this.analytics.last30Days);
         this.logPeriodAnalysis('LAST 14 DAYS', this.analytics.last14Days);
         this.logPeriodAnalysis('LAST 7 DAYS', this.analytics.last7Days);
 
         // Daily breakdown appears AFTER all period analyses
-        if (!this.ultraLowMemory || this.last14DaysBreakdown.size > 0) {
-            this.logLast14DaysBreakdown();
-        } else {
-            console.log(`\n## DAILY BREAKDOWN - LAST 14 DAYS:`);
-            console.log(`   Daily breakdown disabled in ultra-low memory mode to conserve resources.`);
-        }
+        this.logLast14DaysBreakdown();
 
         console.log(`\n# COMPREHENSIVE ANALYSIS COMPLETE - ALL TRANSACTIONS CATEGORIZED (COMPLETE DAYS ONLY)`);
         console.log('='.repeat(80));
@@ -1620,9 +1276,6 @@ calculateWalletAverages(walletMap, totalTx, totalValue) {
             const totalTxForDay = this.getTxCountForDay(date);
             const sharePercentage = this.calculateSharePercentage(stats.totalTransactions, totalTxForDay);
             
-            const incomingWallets = this.disableWalletTracking ? 'N/A' : stats.allIncoming.wallets.size;
-            const outgoingWallets = this.disableWalletTracking ? 'N/A' : stats.payouts.wallets.size;
-            
             const row = [
                 date,
                 stats.totalTransactions,
@@ -1659,8 +1312,8 @@ calculateWalletAverages(walletMap, totalTx, totalValue) {
                 this.formatSats(gamingIn),
                 gamingRatio === 'INFINITY' ? 'INFINITY' : (typeof gamingRatio === 'number' ? gamingRatio.toFixed(4) : gamingRatio),
                 fullRatio === 'INFINITY' ? 'INFINITY' : (typeof fullRatio === 'number' ? fullRatio.toFixed(4) : fullRatio),
-                incomingWallets,
-                outgoingWallets,
+                stats.allIncoming.wallets.size,
+                stats.payouts.wallets.size,
                 stats.blockRange.min === Infinity ? 'N/A' : stats.blockRange.min,
                 stats.blockRange.max === 0 ? 'N/A' : stats.blockRange.max,
                 totalTxForDay,
@@ -1687,13 +1340,9 @@ calculateWalletAverages(walletMap, totalTx, totalValue) {
             totalProcessed: this.processedCount,
             excludeIncompleteDay: true,
             currentDateExcluded: new Date().toISOString().split('T')[0],
-            memoryLimit: this.memoryManager ? this.memoryManager.maxMemoryMB : null,
-            ultraLowMemory: this.ultraLowMemory,
-            walletTrackingDisabled: this.disableWalletTracking,
             duplicateInfo: {
                 duplicateTransactions: this.duplicateTransactions.size,
-                totalDuplicates: this.duplicateCount,
-                skipDuplicateCheck: this.skipDuplicateCheck
+                totalDuplicates: this.duplicateCount
             },
             txCountData: Object.fromEntries(this.txCountData),
             thresholds: this.THRESHOLDS,
@@ -1726,8 +1375,7 @@ calculateWalletAverages(walletMap, totalTx, totalValue) {
             .replace(/:/g, '-')
             .replace(/\..+/, '');
         
-        const modeString = this.ultraLowMemory ? '_ultra_lean' : '_complete_days';
-        const filename = `${lastBlock}_${formattedDate}${modeString}.txt`;
+        const filename = `${lastBlock}_${formattedDate}_complete_days.txt`;
         const textReport = this.generateTextReport();
 
         try {
@@ -1753,8 +1401,7 @@ calculateWalletAverages(walletMap, totalTx, totalValue) {
             .replace(/:/g, '-')
             .replace(/\..+/, '');
         
-        const modeString = this.ultraLowMemory ? '_ultra_lean' : '_complete_days';
-        const filename = `${lastBlock}_${formattedDate}_calendar${modeString}.csv`;
+        const filename = `${lastBlock}_${formattedDate}_calendar_complete_days.csv`;
         const csvData = this.generateCalendarCSV();
 
         try {
@@ -1782,19 +1429,10 @@ calculateWalletAverages(walletMap, totalTx, totalValue) {
             lines.push(`Agent Address: ${this.agentAddress}`);
         }
         
-        // Include memory information in text report
-        if (this.memoryManager) {
-            const memInfo = this.memoryManager.getMemoryInfo();
-            lines.push(`Memory Usage: ${memInfo.heapUsedMB}MB (${memInfo.usagePercent}%) of ${this.memoryManager.maxMemoryMB}MB limit`);
-            lines.push(`Ultra-low memory mode: ${this.ultraLowMemory ? 'ENABLED' : 'DISABLED'}`);
-            lines.push(`Wallet tracking: ${this.disableWalletTracking ? 'DISABLED' : 'ENABLED'}`);
-            lines.push(`Garbage Collection: ${memInfo.gcAvailable ? 'AVAILABLE' : 'NOT AVAILABLE'}`);
-        }
-        
         if (this.duplicateCount > 0) {
             lines.push(`Duplicate Transactions Found: ${this.duplicateTransactions.size.toLocaleString()} unique TXIDs with ${this.duplicateCount.toLocaleString()} total duplicates`);
         } else {
-            lines.push(`Duplicate Check: ${this.skipDuplicateCheck ? 'SKIPPED' : 'No duplicates found'}`);
+            lines.push(`Duplicate Check: No duplicates found`);
         }
         
         if (this.txCountData.size > 0) {
@@ -1849,34 +1487,34 @@ calculateWalletAverages(walletMap, totalTx, totalValue) {
             ...stats,
             satWheel: {
                 ...stats.satWheel,
-                wallets: this.disableWalletTracking ? {} : Object.fromEntries(stats.satWheel.wallets)
+                wallets: Object.fromEntries(stats.satWheel.wallets)
             },
             guessTheBlock: {
                 ...stats.guessTheBlock,
-                wallets: this.disableWalletTracking ? {} : Object.fromEntries(stats.guessTheBlock.wallets)
+                wallets: Object.fromEntries(stats.guessTheBlock.wallets)
             },
             allIncoming: {
                 ...stats.allIncoming,
-                wallets: this.disableWalletTracking ? {} : Object.fromEntries(stats.allIncoming.wallets)
+                wallets: Object.fromEntries(stats.allIncoming.wallets)
             },
             gamingIncoming: {
                 ...stats.gamingIncoming,
-                wallets: this.disableWalletTracking ? {} : Object.fromEntries(stats.gamingIncoming.wallets)
+                wallets: Object.fromEntries(stats.gamingIncoming.wallets)
             },
             uncategorizedIncoming: {
                 ...stats.uncategorizedIncoming,
-                wallets: this.disableWalletTracking ? {} : Object.fromEntries(stats.uncategorizedIncoming.wallets),
+                wallets: Object.fromEntries(stats.uncategorizedIncoming.wallets),
                 valueRanges: Object.fromEntries(stats.uncategorizedIncoming.valueRanges)
             },
             payouts: {
                 ...stats.payouts,
-                wallets: this.disableWalletTracking ? {} : Object.fromEntries(stats.payouts.wallets)
+                wallets: Object.fromEntries(stats.payouts.wallets)
             }
         };
     }
 }
 
-// Enhanced main execution function
+// Main execution function
 async function main() {
     try {
         const csvFilename = process.argv[2] || process.env.CSV_FILENAME;
@@ -1887,15 +1525,8 @@ async function main() {
             console.error(`[${new Date().toISOString()}] INFO: ## Example: node analyze.js 0xfb8e879cb77aeb594850da75f30c7d777ce54513.csv`);
             console.error(`[${new Date().toISOString()}] INFO: ## Set AGENT environment variable to track agent transactions separately for 1 sat only`);
             console.error(`[${new Date().toISOString()}] INFO: ## Set TX_COUNT environment variable with transaction count data or API URL`);
-            console.error(`[${new Date().toISOString()}] INFO: ## Set MAX_MEM_ANALYZE environment variable to limit memory usage in MB (default: 2048)`);
-            console.error(`[${new Date().toISOString()}] INFO: ## Set CHUNK_SIZE environment variable to control chunk size (default: auto-sized based on memory)`);
-            console.error(`[${new Date().toISOString()}] INFO: ## Set ENABLE_MEMORY_SWAP=false to disable memory swapping (default: enabled)`);
-            console.error(`[${new Date().toISOString()}] INFO: ## Set ENABLE_STREAMING=false to disable chunked processing (default: enabled)`);
-            console.error(`[${new Date().toISOString()}] INFO: ## Set ULTRA_LOW_MEMORY=true for extreme memory constraints (default: auto-detect)`);
             console.error(`[${new Date().toISOString()}] INFO: ## Set DEBUG=1 to enable debug logging, DEBUG=0 to disable (default)`);
             console.error(`[${new Date().toISOString()}] INFO: ## NOTE: Analysis now excludes incomplete days (today) for accurate reporting`);
-            console.error(`[${new Date().toISOString()}] INFO: ## IMPORTANT: Use --expose-gc flag for optimal memory management: node --expose-gc analyze.js`);
-            console.error(`[${new Date().toISOString()}] INFO: ## Without --expose-gc, smaller chunk sizes and more aggressive cleanup will be used`);
             process.exit(1);
         }
         
@@ -1909,11 +1540,11 @@ async function main() {
         const analyzer = new ComprehensiveTransactionAnalyzer(csvFilename);
         await analyzer.init(); // Initialize TX_COUNT data
         
-        console.log(`[${new Date().toISOString()}] INFO: ## Starting enhanced analysis with ultra-conservative memory management...`);
+        console.log(`[${new Date().toISOString()}] INFO: ## Starting comprehensive analysis with complete categorization (excluding incomplete days)...`);
         const startTime = Date.now();
         
         await analyzer.analyzeStreaming();
-        await analyzer.generateReport();
+        analyzer.generateReport();
         
         // Always export to TXT and CSV
         await analyzer.exportToTXT();
@@ -1927,19 +1558,6 @@ async function main() {
         
         const duration = ((Date.now() - startTime) / 1000).toFixed(2);
         console.log(`[${new Date().toISOString()}] INFO: ## Total analysis time: ${duration} seconds`);
-        
-        // Final memory report
-        if (analyzer.memoryManager) {
-            const memInfo = analyzer.memoryManager.getMemoryInfo();
-            console.log(`[${new Date().toISOString()}] INFO: ## Final memory usage: ${memInfo.heapUsedMB}MB (${memInfo.usagePercent}%) of ${analyzer.memoryManager.maxMemoryMB}MB limit`);
-            console.log(`[${new Date().toISOString()}] INFO: ## Processing completed with ultra-conservative memory management`);
-            console.log(`[${new Date().toISOString()}] INFO: ## Wallet tracking: ${analyzer.disableWalletTracking ? 'DISABLED' : 'ENABLED'}`);
-            console.log(`[${new Date().toISOString()}] INFO: ## Garbage collection was ${memInfo.gcAvailable ? 'AVAILABLE' : 'NOT AVAILABLE'}`);
-            
-            if (!memInfo.gcAvailable) {
-                console.log(`[${new Date().toISOString()}] INFO: ## For better performance, restart with: node --expose-gc analyze.js`);
-            }
-        }
         
     } catch (error) {
         console.error(`[${new Date().toISOString()}] ERROR: ## Comprehensive analysis failed:`, error);
